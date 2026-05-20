@@ -5643,9 +5643,9 @@
     return c4Text(endpoints.x1 + 10, y, value, 11, 650, t.text)
   }
 
-  function classRelationLabel(value, x, y) {
+  function classRelationLabel(value, x, y, anchor = 'middle', baselineShift = 0) {
     const t = theme()
-    return text(x, y, value, 11, 650, t.text)
+    return c4Text(x, y + baselineShift, value, 11, 650, t.text, anchor)
   }
 
   function renderClassDiagram(source, renderOptions) {
@@ -5703,7 +5703,10 @@
       const endpoints = { x1: route.start.x, y1: route.start.y, x2: route.end.x, y2: route.end.y }
       const labelMarkup = relation.label
         ? (() => {
-            if (route.labelCenter) return classRelationLabel(relation.label, route.labelCenter.x, route.labelCenter.y)
+            if (route.labelCenter) {
+              const baselineShift = classDirectionHorizontal(diagram.direction) ? 0 : 3.5
+              return classRelationLabel(relation.label, route.labelCenter.x, route.labelCenter.y, 'middle', baselineShift)
+            }
             const labelW = analyticsEstimateTextWidth(relation.label, 11, 650) + 18
             const x = classDirectionHorizontal(diagram.direction) ? (route.labelFrom.x + route.labelTo.x) / 2 : route.labelFrom.x + 12 + labelW / 2
             const y = classDirectionHorizontal(diagram.direction) ? Math.min(route.labelFrom.y, route.labelTo.y) - 18.5 : (route.labelFrom.y + route.labelTo.y) / 2 + 3.5

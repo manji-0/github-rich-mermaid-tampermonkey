@@ -939,6 +939,47 @@ const c4InvariantSamples = [
   },
 ]
 
+const classRustSamples = [
+  {
+    name: 'Class relation labels use Rust baseline placement',
+    source: `classDiagram
+  direction LR
+  class Document {
+    +String path
+    +u64 published_revision
+  }
+  class DependencyEdge {
+    +String kind
+    +String target
+  }
+  Document "1" --> "*" DependencyEdge : contains`,
+    check({ svg }) {
+      const group = classRelationGroup(svg, 'Document->DependencyEdge')
+      const label = group.match(/<text\b[^>]*>contains<\/text>/)?.[0]
+      if (!label) throw new Error('class relation label missing')
+      if (label.includes('dominant-baseline')) throw new Error('class relation label should use Rust baseline text')
+    },
+  },
+  {
+    name: 'C4Code relation labels use Rust baseline placement',
+    source: `C4Code
+  title Graph service code structure
+  class GraphService {
+    +load_document_graph(id)
+  }
+  class GraphRepository {
+    +fetch_document(id)
+  }
+  GraphService --> GraphRepository : reads`,
+    check({ svg }) {
+      const group = classRelationGroup(svg, 'GraphService->GraphRepository')
+      const label = group.match(/<text\b[^>]*>reads<\/text>/)?.[0]
+      if (!label) throw new Error('C4Code relation label missing')
+      if (label.includes('dominant-baseline')) throw new Error('C4Code relation label should use Rust baseline text')
+    },
+  },
+]
+
 const flowchartRustSamples = [
   {
     name: 'simple TD data attributes',
@@ -2091,6 +2132,7 @@ function rustParitySources(galleryBlocks, supportedTypes) {
       .concat(c4RegressionSamples)
       .concat(c4RustComplexScenarios.map((sample) => sample.source))
       .concat(c4InvariantSamples.map((sample) => sample.source))
+      .concat(classRustSamples.map((sample) => sample.source))
       .concat(flowchartRustSamples.map((sample) => sample.source))
       .concat(erRustSamples.map((sample) => sample.source))
       .concat(journeyRustSamples.map((sample) => sample.source))
@@ -2330,6 +2372,15 @@ function c4RelationGroup(svg, id) {
   if (start < 0) throw new Error(`missing C4 relation ${id}`)
   const group = svgGroupAt(svg, start)
   if (!group) throw new Error(`unterminated C4 relation ${id}`)
+  return group
+}
+
+function classRelationGroup(svg, id) {
+  const marker = `<g data-class-rel="${id}">`
+  const start = svg.indexOf(marker)
+  if (start < 0) throw new Error(`missing class relation ${id}`)
+  const group = svgGroupAt(svg, start)
+  if (!group) throw new Error(`unterminated class relation ${id}`)
   return group
 }
 
@@ -3035,6 +3086,7 @@ function main() {
     .concat(c4RegressionSamples)
     .concat(c4RustComplexScenarios.map((sample) => sample.source))
     .concat(c4InvariantSamples.map((sample) => sample.source))
+    .concat(classRustSamples.map((sample) => sample.source))
 
   let rendered = 0
   for (const source of blocks) {
@@ -3092,6 +3144,13 @@ function main() {
     const repairSummary = renderer.c4RepairWorkItems(model, scene, workItems)
     assertC4RepairSummary(repairSummary)
     assertC4Exhaustive(sample, model, scene, workItems, renderer)
+  }
+
+  for (const sample of classRustSamples) {
+    const svg = renderer.renderMermaidSvg(sample.source)
+    if (!svg.includes('<svg')) throw new Error(`${sample.name}: missing svg`)
+    assertRustSvgShell(svg, sample.name)
+    sample.check({ svg, renderer })
   }
 
   for (const sample of flowchartRustSamples) {
