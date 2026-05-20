@@ -1,30 +1,45 @@
-# GitHub Rich Mermaid Tampermonkey
+# GitHub Mermaid Rich Renderer
 
-GitHub の Markdown preview に含まれる Mermaid diagram を、Tampermonkey 内の Docattice-style JavaScript SVG renderer で置き換える userscript。
+A self-contained Tampermonkey userscript that replaces Mermaid diagrams in GitHub Markdown with rich, deterministic SVG rendering.
 
-## Requirements
+It is designed for README files, pull requests, issues, discussions, and GitHub's live Markdown preview. The script runs entirely in the browser: no server, no WASM runtime, and no external renderer process are required.
 
-- Tampermonkey
+## Highlights
+
+- Renders many Mermaid diagram families that are useful in technical documentation.
+- Includes a C4-aware layout engine for context, container, component, and code diagrams.
+- Watches GitHub's dynamic Markdown UI, so diagrams added by preview updates are rendered after they appear.
+- Keeps GitHub's original block visible with an error caption if custom rendering fails.
+- Uses deterministic SVG output so regressions can be checked in tests.
 
 ## Install
 
-1. Tampermonkey の dashboard で new script を作る。
-2. `github-docattice-mermaid.user.js` の内容を貼り付ける。
-3. GitHub の Markdown / PR / issue preview を開く。
+1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser.
+2. Open the [raw userscript](https://raw.githubusercontent.com/manji-0/github-rich-mermaid-tampermonkey/main/github-rich-mermaid.user.js).
+3. Let Tampermonkey install the script, then refresh a GitHub Markdown page that contains Mermaid diagrams.
 
-## Supported Renderers
+The userscript includes Tampermonkey update metadata, so future updates can be picked up from this repository.
 
-The userscript is self-contained and supports the diagram types used most often in GitHub Markdown previews:
+## Supported Diagrams
+
+The parser targets common Mermaid syntax used in GitHub-hosted documentation. It is not a complete Mermaid grammar implementation.
+
+C4 and architecture:
 
 - `C4Context`
 - `C4Container`
 - `C4Component`
 - `C4Code`
 - `architecture-beta`
+
+Core documentation diagrams:
+
+- `flowchart` / `graph`
+- `sequenceDiagram`
 - `classDiagram` / `classDiagram-v2`
+- `stateDiagram` / `stateDiagram-v2`
 - `erDiagram`
 - `journey`
-- `flowchart` / `graph`
 - `gantt`
 - `pie`
 - `quadrantChart`
@@ -32,18 +47,20 @@ The userscript is self-contained and supports the diagram types used most often 
 - `gitGraph`
 - `mindmap`
 - `timeline`
-- `sequenceDiagram`
-- `stateDiagram` / `stateDiagram-v2`
-- `sankey` / `sankey-beta`
+- `zenuml`
+
+Beta and specialized diagrams:
+
 - `block-beta`
 - `packet-beta`
 - `kanban`
+- `sankey` / `sankey-beta`
 - `treemap-beta`
 - `xychart` / `xychart-beta`
 - `radar-beta`
 - `venn-beta`
 
-## Gallery
+## Examples
 
 ### Flowchart
 
@@ -64,102 +81,6 @@ sequenceDiagram
   S-->>C: 200 OK
 ```
 
-### ER Diagram
-
-```mermaid
-erDiagram
-  USER ||--o{ POST : writes
-  POST ||--o{ COMMENT : has
-  USER {
-    string id PK
-    string email UK
-  }
-  POST {
-    string id PK
-    string title
-  }
-```
-
-### Journey
-
-```mermaid
-journey
-  title Draft save experience
-  section Write
-    Open editor: 5: Author
-    Edit content: 4: Author
-  section Publish
-    Request review: 3: Author, Reviewer
-    Approve: 5: Reviewer
-```
-
-### Gantt
-
-```mermaid
-gantt
-  title MVP rollout
-  section Backend
-    API design  :done,  api,  2026-01-01, 7d
-    Integration :active, int, 2026-01-08, 5d
-  section Frontend
-    UI build    :        ui,  2026-01-10, 7d
-```
-
-### Pie
-
-```mermaid
-pie title Dependency kinds
-  "Runtime"  : 42
-  "Dev"      : 33
-  "Optional" : 25
-```
-
-### Quadrant Chart
-
-```mermaid
-quadrantChart
-  title Impact vs effort
-  x-axis Low Effort --> High Effort
-  y-axis Low Impact --> High Impact
-  quadrant-1 Quick wins
-  quadrant-2 Major projects
-  quadrant-3 Fill-ins
-  quadrant-4 Thankless tasks
-  Caching: [0.2, 0.8]
-  Auth refactor: [0.7, 0.9]
-  Log cleanup: [0.3, 0.3]
-```
-
-### Requirement Diagram
-
-```mermaid
-requirementDiagram
-  requirement auth_req {
-    id: 1
-    text: Users must authenticate via OAuth 2.0
-    risk: high
-    verifymethod: test
-  }
-  element login_svc {
-    type: component
-  }
-  login_svc - satisfies -> auth_req
-```
-
-### Git Graph
-
-```mermaid
-gitGraph
-  title "Release Flow"
-  commit id: "init"
-  branch feature
-  checkout feature
-  commit id: "feat: add auth"
-  checkout main
-  merge feature
-  commit id: "chore: release v1.0"
-```
-
 ### C4 Container
 
 ```mermaid
@@ -174,46 +95,34 @@ C4Container
   Rel_D(worker, kv, "Reads cache")
 ```
 
-### Mindmap
+## Rendering Algorithm
 
-```mermaid
-mindmap
-  root((Docattice))
-    Rendering
-      Mermaid
-      Markdown
-    Storage
-      D1
-      R2
-    Delivery
-      Cloudflare Workers
+<!-- derived-from ./docs/rendering-algorithm.md -->
+
+Most diagram types use compact, purpose-built parsers and SVG renderers. C4 diagrams use the full layout pipeline: model parsing, hierarchy-aware measurement, row ordering, orthogonal routing, relation-label placement, validation, and repair.
+
+Read the detailed explanation in [Rendering Algorithm](./docs/rendering-algorithm.md).
+
+## Development
+
+The main userscript is [github-rich-mermaid.user.js](./github-rich-mermaid.user.js). The verifier is [verify.js](./verify.js).
+
+Run the regression suite with:
+
+```bash
+node verify.js
 ```
 
-### Timeline
+For optional Rust parity checks against the Docattice renderer, run:
 
-```mermaid
-timeline
-  title Docattice milestones
-  2024 : Initial prototype
-  2025 : Public beta
-       : Rust renderer
-  2026 : GA release
+```bash
+node verify.js --rust-parity
 ```
+
+The parity mode builds a temporary Rust helper from the current workspace and compares selected non-sequence samples for SVG viewBox, text-token parity, and large shape-count drift. It requires `cargo`.
 
 ## Notes
 
-- No WASM or Docattice Web server is required.
-- GitHub DOM is observed continuously, so diagrams inserted by live preview are enhanced after they appear.
-- If Docattice rendering fails, the original GitHub block remains visible with an error caption.
-- The C4 renderer ports the Docattice C4 model and scene pipeline for `C4Context`, `C4Container`, and `C4Component`: boundary nesting, node kind/external/data-store handling, directed relation constraints, recursive container measurement, row lane spacing, row crossing reduction, row relaxation, orthogonal routing, label candidate assignment, label lane reservations, boundary crossing lane reservations, scope transition validation, validation issue detection, reroute/relabel repair iterations, C4 icons, and boundary/leaf rendering. The parser still targets common Mermaid/C4 forms, not every Mermaid grammar feature.
-
-## Verify
-
-```bash
-node /Users/manji0/src/docattice/extensions/github-mermaid-tampermonkey/verify.js
-node /Users/manji0/src/docattice/extensions/github-mermaid-tampermonkey/verify.js --rust-parity
-```
-
-The verifier renders the supported gallery diagrams plus regression samples derived from the Rust renderer tests. It checks C4 routing/label validation, label lane reservations, crossing lane reservations, scope transition mismatch detection, repair summary consistency, route detour/bend budgets, canvas waste, deterministic output, same-row spacing, cascade alignment, fan-out alignment, route/node avoidance, parallel lane separation, fan-out anchor ordering, collinear overlap prevention, orthogonal routes, canvas bounds, data attributes, and default C4 titles. It also covers Rust-compatible parser/rendering cases for Flowchart, ER, Journey, Gantt, Pie, Quadrant, Requirement, GitGraph, Mindmap, Timeline, ZenUML, and Sequence quality regressions for GitHub entity-decoded source.
-
-`--rust-parity` builds a temporary Rust helper from the current workspace and compares the JavaScript renderer against `docattice-mermaid-extras` for supported non-sequence samples. It requires `cargo` and checks exact `viewBox`, text-token parity, and large SVG-shape count drift.
+- The script is scoped to `https://github.com/*`.
+- Rendering is intentionally conservative: unsupported or failed diagrams fall back to GitHub's original content.
+- C4 support is optimized for common Mermaid C4 forms, including nested boundaries, external nodes, data stores, directed relations, lane reservations, and repair metadata.
