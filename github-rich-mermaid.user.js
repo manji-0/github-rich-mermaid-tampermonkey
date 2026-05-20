@@ -4415,50 +4415,58 @@
     const starts = tasks.map((task) => task.start).filter(Boolean)
     const minDate = starts.length ? starts.reduce((min, d) => dayNumber(d) < dayNumber(min) ? d : min, starts[0]) : fallbackMin
     const totalDays = Math.max(7, Math.max(...tasks.map((task, index) => (task.start ? daysBetween(task.start, minDate) : index * 2) + task.days)))
-    const labelW = 200
-    const chartLeft = labelW + 18
+    const marginX = 40
+    const labelW = 190
+    const chartGap = 22
+    const chartLeft = marginX + labelW + chartGap
     const rawChartW = totalDays * 16
     const dayW = rawChartW > 820 ? 820 / totalDays : 16
     const chartW = totalDays * dayW
-    const rowH = 36
-    const sectionH = 26
-    const axisH = 28
-    const topY = 76
+    const chartRight = chartLeft + chartW
+    const contentLeft = marginX
+    const contentW = chartRight - contentLeft
+    const rowH = 38
+    const sectionH = 28
+    const axisH = 34
+    const topY = 42
     const contentY = topY + axisH
     const contentH = sections.reduce((sum, sec) => sum + sectionH + sec.indices.length * rowH, 0)
-    const width = Math.max(720, chartLeft + chartW + 40)
-    const height = contentY + contentH + 24
+    const width = Math.max(720, chartRight + marginX)
+    const height = contentY + contentH + 36
     const tickInterval = totalDays > 90 ? 14 : 7
     const gridLayer = []
     const labelLayer = []
     for (let day = 0; day <= totalDays; day += tickInterval) {
       const gx = chartLeft + day * dayW
-      if (gx > width - 20) break
-      labelLayer.push(text(gx, topY + 18, dateLabel(addDays(minDate, day)), 10, 500, t.muted))
+      if (gx > chartRight + 0.1) break
+      labelLayer.push(text(gx, contentY - 14, dateLabel(addDays(minDate, day)), 11, 600, t.muted))
       gridLayer.push(`<line x1="${gx.toFixed(1)}" y1="${contentY.toFixed(1)}" x2="${gx.toFixed(1)}" y2="${(contentY + contentH).toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" stroke-dasharray="4 4" opacity="0.35"/>`)
     }
-    gridLayer.push(line(0, contentY, width, contentY, t.border))
-    gridLayer.push(line(labelW, topY, labelW, contentY + contentH, t.border))
+    gridLayer.push(line(contentLeft, contentY, chartRight, contentY, t.border))
+    gridLayer.push(line(chartLeft - chartGap / 2, topY, chartLeft - chartGap / 2, contentY + contentH, t.border))
     let y = contentY
     const backgroundLayer = []
     const foregroundLayer = []
+    backgroundLayer.push(`<rect x="${contentLeft.toFixed(1)}" y="${topY.toFixed(1)}" width="${contentW.toFixed(1)}" height="${(axisH + contentH).toFixed(1)}" fill="${t.surface}" fill-opacity="0.28" stroke="none"/>`)
     sections.forEach((sec, secIndex) => {
       const secColor = palette[secIndex % palette.length]
-      backgroundLayer.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${sectionH}" fill="${secColor}" fill-opacity="0.10" stroke="none"/>`)
-      foregroundLayer.push(text(16, y + 18, sec.name, 11, 700, secColor, 'start'))
+      backgroundLayer.push(`<rect x="${contentLeft.toFixed(1)}" y="${y.toFixed(1)}" width="${contentW.toFixed(1)}" height="${sectionH}" fill="${secColor}" fill-opacity="0.10" stroke="none"/>`)
+      foregroundLayer.push(rect(contentLeft, y, 4, sectionH, 2, secColor, 'none'))
+      foregroundLayer.push(text(contentLeft + 16, y + sectionH / 2, sec.name, 12, 750, secColor, 'start'))
       y += sectionH
       sec.indices.forEach((taskIndex, localIndex) => {
         const task = tasks[taskIndex]
-        if (localIndex % 2 === 1) backgroundLayer.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${rowH}" fill="${t.text}" fill-opacity="0.03" stroke="none"/>`)
-        gridLayer.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${width.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" opacity="0.12"/>`)
-        foregroundLayer.push(text(24, y + 22, truncateLabel(task.name, labelW - 40), 12, 500, t.text, 'start'))
+        if (localIndex % 2 === 1) backgroundLayer.push(`<rect x="${contentLeft.toFixed(1)}" y="${y.toFixed(1)}" width="${contentW.toFixed(1)}" height="${rowH}" fill="${t.text}" fill-opacity="0.03" stroke="none"/>`)
+        gridLayer.push(`<line x1="${contentLeft.toFixed(1)}" y1="${y.toFixed(1)}" x2="${chartRight.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" opacity="0.12"/>`)
+        foregroundLayer.push(text(contentLeft + 16, y + rowH / 2, truncateLabel(task.name, labelW - 32), 13, 550, t.text, 'start'))
         const startDays = task.start ? daysBetween(task.start, minDate) : taskIndex * 2
         const bx = chartLeft + startDays * dayW
         const bw = Math.max(32, Math.max(1, task.days) * dayW)
         const fill = task.state.includes('done') ? t.success : task.state.includes('active') ? t.accent : secColor
-        foregroundLayer.push(rect(bx, y + 9, bw, 18, 9, fill, 'none'))
+        const barH = 20
+        foregroundLayer.push(rect(bx, y + (rowH - barH) / 2, bw, barH, 10, fill, 'none'))
         const durLabel = `${task.days}d`
-        if (bw > c4EstimateTextWidth(durLabel, 10, 700) + 12) foregroundLayer.push(text(bx + 8, y + 22, durLabel, 10, 700, t.surface, 'start'))
+        if (bw > c4EstimateTextWidth(durLabel, 11, 750) + 14) foregroundLayer.push(text(bx + 10, y + rowH / 2, durLabel, 11, 750, t.surface, 'start'))
         y += rowH
       })
     })

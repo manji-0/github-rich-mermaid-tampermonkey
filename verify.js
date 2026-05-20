@@ -42,7 +42,7 @@ const galleryViewBoxExpectations = [
   { index: 4, type: 'stateDiagram-v2', viewBox: '0 0 300.0 536.0' },
   { index: 5, type: 'erDiagram', viewBox: '0 0 300.0 344.0' },
   { index: 6, type: 'journey', title: 'Draft save experience', viewBox: '0 0 920.0 674.0' },
-  { index: 7, type: 'gantt', title: 'MVP rollout', viewBox: '0 0 720.0 378.0' },
+  { index: 7, type: 'gantt', title: 'MVP rollout', viewBox: '0 0 720.0 374.0' },
   { index: 8, type: 'pie', title: 'Dependency kinds', viewBox: '0 0 900.0 494.0' },
   { index: 9, type: 'quadrantChart', title: 'Impact vs effort', viewBox: '0 0 860.0 584.0' },
   { index: 10, type: 'requirementDiagram', viewBox: '0 0 892.0 334.0' },
@@ -1247,6 +1247,13 @@ UI :active, ui, 2026-03-05, 5d`,
       assertIncludes(svg, '>Web</text>', this.name)
       assertIncludes(svg, '>4d</text>', this.name)
       assertIncludes(svg, '>5d</text>', this.name)
+      assertIncludes(svg, '<rect x="40.0" y="76.0"', this.name)
+      if (svgTextY(svg, 'Backend') !== 90) throw new Error('Gantt section label should be vertically centered in header row')
+      if (svgTextY(svg, 'API') !== 123) throw new Error('Gantt task label should be vertically centered in task row')
+      if (svgTextY(svg, '4d') !== 123) throw new Error('Gantt duration label should be vertically centered in task bar')
+      if (svgTextY(svg, 'Web') !== 156) throw new Error('Gantt second section label should be vertically centered in header row')
+      if (svgTextY(svg, 'UI') !== 189) throw new Error('Gantt second task label should be vertically centered in task row')
+      if (svgTextY(svg, '5d') !== 189) throw new Error('Gantt second duration label should be vertically centered in task bar')
       const backgroundIndex = svg.indexOf('fill-opacity="0.10"')
       const gridIndex = svg.indexOf('stroke-dasharray="4 4"')
       const labelIndex = svg.indexOf('>Backend</text>')
@@ -2174,15 +2181,15 @@ function assertGitHubReplacementShell(renderer) {
 }
 
 function svgAttrValue(snippet, attrName) {
-  const match = snippet.match(new RegExp(`${attrName}="([^"]+)"`))
+  const match = snippet.match(new RegExp(`(?:^|\\s)${attrName}="([^"]+)"`))
   return match?.[1] ?? null
 }
 
 function svgTextY(svg, content) {
   const escaped = content.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = svg.match(new RegExp(`<text\\b[^>]*y="([^"]+)"[^>]*>${escaped}</text>`))
+  const match = svg.match(new RegExp(`<text\\b[^>]*>${escaped}</text>`))
   if (!match) throw new Error(`missing SVG text ${content}`)
-  return Number(match[1])
+  return Number(svgAttrValue(match[0], 'y'))
 }
 
 function assertPillTextCentered(svg, content, label) {
