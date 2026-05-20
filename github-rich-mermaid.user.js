@@ -130,6 +130,31 @@
     }
   }
 
+  function sourceFromRenderSection(section) {
+    // data-plain on js-render-enrichment-target: HTML attrs decoded by browser, giving clean source
+    const target = section.querySelector?.('.js-render-enrichment-target')
+    if (target) {
+      const plain = target.getAttribute('data-plain') || ''
+      if (supportedDiagramType(plain)) { rememberMermaidSource(plain); return plain }
+      // data-json fallback: {"data":"<html-encoded source>"}
+      const dataJson = target.getAttribute('data-json')
+      if (dataJson) {
+        try {
+          const parsed = JSON.parse(dataJson)
+          const source = typeof parsed?.data === 'string' ? decodeHtmlEntities(parsed.data) : ''
+          if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+        } catch (_) {}
+      }
+    }
+    // pre[lang="mermaid"] textContent: browser decodes HTML entities automatically
+    const pre = section.querySelector?.('pre[lang="mermaid"]')
+    if (pre) {
+      const source = pre.textContent?.trim() || ''
+      if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+    }
+    return null
+  }
+
   function rawMarkdownUrlFromPage() {
     const rawLink = Array.from(document.querySelectorAll('a[href]'))
       .map((link) => link.href)
@@ -5059,6 +5084,17 @@
   }
 
   function scanMermaidElements(root) {
+    // GitHub current DOM: <section class="js-render-needs-enrichment" data-host="...viewscreen...">
+    root.querySelectorAll?.('section.js-render-needs-enrichment, section.render-needs-enrichment').forEach((section) => {
+      if (section.closest('.docattice-github-mermaid')) return
+      if (section.getAttribute(ENHANCED_ATTR)) return
+      const host = section.getAttribute('data-host') || ''
+      const src = section.getAttribute('data-src') || ''
+      if (!host.includes('viewscreen') && !src.includes('viewscreen') && !src.includes('mermaid')) return
+      const source = sourceFromRenderSection(section)
+      if (source) enqueueRender(section, source)
+    })
+
     const selectors = [
       '.mermaid',
       'pre.mermaid',
@@ -5113,6 +5149,13 @@
       const source = sourceFromCodeBlock(node)
       const pre = node.closest('pre')
       if (source && pre) enqueueRender(pre, source)
+      return
+    }
+    if (node.matches?.('section.js-render-needs-enrichment, section.render-needs-enrichment')) {
+      if (!node.getAttribute(ENHANCED_ATTR)) {
+        const source = sourceFromRenderSection(node)
+        if (source) enqueueRender(node, source)
+      }
       return
     }
     scanCodeBlocks(node)
