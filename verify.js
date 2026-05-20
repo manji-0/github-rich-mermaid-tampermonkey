@@ -199,6 +199,8 @@ const c4RustComplexScenarios = [
       if (!(lane > platform.x + platform.w + 4)) {
         throw new Error(`external payment route should leave platform boundary: lane=${lane?.toFixed(1)} platformRight=${(platform.x + platform.w).toFixed(1)}`)
       }
+      const totalCrossings = c4RouteCrossingCount(workItems)
+      if (totalCrossings !== 0) throw new Error(`ecommerce checkout routes should not cross: ${totalCrossings}`)
     },
   },
   {
@@ -2840,6 +2842,11 @@ function assertOrthogonal(points, label) {
 
 function assertC4Exhaustive(sample, model, scene, workItems, renderer) {
   const validation = renderer.c4BuildValidationScene(model, scene, workItems)
+  const issues = renderer.c4ValidateScene(validation)
+  const labelRouteIssues = issues.filter((issue) => issue.kind === 'LabelCrossesForeignRoute')
+  if (labelRouteIssues.length) {
+    throw new Error(`${sample.name}: label crosses unrelated route: ${labelRouteIssues.map((issue) => `${issue.relationIndex}->${issue.owner}`).join(', ')}`)
+  }
   for (const id of sample.expectedNodes) {
     if (!scene.layouts.has(id)) throw new Error(`${sample.name}: missing node ${id}`)
   }
