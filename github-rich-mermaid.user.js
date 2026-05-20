@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Mermaid Rich Renderer
 // @namespace    https://github.com/manji-0/github-mermaid-rich-renderer
-// @version      0.3.1
+// @version      0.3.2
 // @description  Replace GitHub Markdown preview Mermaid diagrams with a Rich-style SVG renderer.
 // @author       manji0
 // @match        https://github.com/*
@@ -161,6 +161,19 @@
     if (pre) {
       const source = pre.textContent?.trim() || ''
       if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+    }
+    // 5. GitHub-rendered SVG: aria-roledescription matches Mermaid type, find source from siblings
+    const renderedSvg = section.querySelector?.('svg[aria-roledescription]')
+    if (renderedSvg) {
+      const role = renderedSvg.getAttribute('aria-roledescription') || ''
+      // aria-roledescription contains the diagram type (e.g., "flowchart", "c4", "sequence")
+      // Try to find source from any pre sibling that may have been hidden
+      const anyPre = section.querySelector?.('pre')
+      if (anyPre) {
+        const source = anyPre.textContent?.trim() || ''
+        if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+      }
+      console.log('[mermaid-rich] sourceFromRenderSection: SVG found but no source. role=', role, 'section:', section.outerHTML.slice(0, 300))
     }
     return null
   }
@@ -5094,15 +5107,29 @@
   }
 
   function scanMermaidElements(root) {
-    // GitHub current DOM: <section class="js-render-needs-enrichment" data-host="...viewscreen...">
+    // Strategy 1: section.js-render-needs-enrichment with data-plain (GitHub's lazy Mermaid rendering)
     root.querySelectorAll?.('section.js-render-needs-enrichment, section.render-needs-enrichment').forEach((section) => {
       if (section.closest('.docattice-github-mermaid')) return
       if (section.getAttribute(ENHANCED_ATTR)) return
-      const host = section.getAttribute('data-host') || ''
-      const src = section.getAttribute('data-src') || ''
-      if (!host.includes('viewscreen') && !src.includes('viewscreen') && !src.includes('mermaid')) return
       const source = sourceFromRenderSection(section)
-      if (source) enqueueRender(section, source)
+      if (source) {
+        console.log('[mermaid-rich] section: replacing', detectMermaidDiagramType(source), section)
+        enqueueRender(section, source)
+      }
+    })
+
+    // Strategy 2: GitHub has already rendered Mermaid to SVG inside the section
+    root.querySelectorAll?.(
+      'section.js-render-needs-enrichment svg[aria-roledescription], section.render-needs-enrichment svg[aria-roledescription]'
+    ).forEach((svgElement) => {
+      if (svgElement.closest('.docattice-github-mermaid')) return
+      const section = svgElement.closest('section.js-render-needs-enrichment, section.render-needs-enrichment')
+      if (!section || section.getAttribute(ENHANCED_ATTR)) return
+      const source = sourceFromRenderSection(section)
+      if (source) {
+        console.log('[mermaid-rich] svg-in-section: replacing', detectMermaidDiagramType(source), section)
+        enqueueRender(section, source)
+      }
     })
 
     const selectors = [
