@@ -31,6 +31,163 @@ The userscript is self-contained and supports the diagram types used most often 
 - `timeline`
 - `sequenceDiagram`
 
+## Gallery
+
+### Flowchart
+
+```mermaid
+flowchart LR
+  A[Write] --> B{Review}
+  B -- Approved --> C[Merge]
+  B -- Changes --> A
+```
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: GET /api/data
+  S-->>C: 200 OK
+```
+
+### ER Diagram
+
+```mermaid
+erDiagram
+  USER ||--o{ POST : writes
+  POST ||--o{ COMMENT : has
+  USER {
+    string id PK
+    string email UK
+  }
+  POST {
+    string id PK
+    string title
+  }
+```
+
+### Journey
+
+```mermaid
+journey
+  title Draft save experience
+  section Write
+    Open editor: 5: Author
+    Edit content: 4: Author
+  section Publish
+    Request review: 3: Author, Reviewer
+    Approve: 5: Reviewer
+```
+
+### Gantt
+
+```mermaid
+gantt
+  title MVP rollout
+  section Backend
+    API design  :done,  api,  2026-01-01, 7d
+    Integration :active, int, 2026-01-08, 5d
+  section Frontend
+    UI build    :        ui,  2026-01-10, 7d
+```
+
+### Pie
+
+```mermaid
+pie title Dependency kinds
+  "Runtime"  : 42
+  "Dev"      : 33
+  "Optional" : 25
+```
+
+### Quadrant Chart
+
+```mermaid
+quadrantChart
+  title Impact vs effort
+  x-axis Low Effort --> High Effort
+  y-axis Low Impact --> High Impact
+  quadrant-1 Quick wins
+  quadrant-2 Major projects
+  quadrant-3 Fill-ins
+  quadrant-4 Thankless tasks
+  Caching: [0.2, 0.8]
+  Auth refactor: [0.7, 0.9]
+  Log cleanup: [0.3, 0.3]
+```
+
+### Requirement Diagram
+
+```mermaid
+requirementDiagram
+  requirement auth_req {
+    id: 1
+    text: Users must authenticate via OAuth 2.0
+    risk: high
+    verifymethod: test
+  }
+  element login_svc {
+    type: component
+  }
+  login_svc - satisfies -> auth_req
+```
+
+### Git Graph
+
+```mermaid
+gitGraph
+  title "Release Flow"
+  commit id: "init"
+  branch feature
+  checkout feature
+  commit id: "feat: add auth"
+  checkout main
+  merge feature
+  commit id: "chore: release v1.0"
+```
+
+### C4 Container
+
+```mermaid
+C4Container
+  title Docattice Cloudflare delivery
+  Person(user, "User", "Reads documents")
+  System_Boundary(edge, "Cloudflare Edge") {
+    Container(worker, "Rust Worker", "Cloudflare Workers", "Serves content")
+    ContainerDb(kv, "KV Cache", "Workers KV", "Cached responses")
+  }
+  Rel_R(user, worker, "HTTPS")
+  Rel_D(worker, kv, "Reads cache")
+```
+
+### Mindmap
+
+```mermaid
+mindmap
+  root((Docattice))
+    Rendering
+      Mermaid
+      Markdown
+    Storage
+      D1
+      R2
+    Delivery
+      Cloudflare Workers
+```
+
+### Timeline
+
+```mermaid
+timeline
+  title Docattice milestones
+  2024 : Initial prototype
+  2025 : Public beta
+       : Rust renderer
+  2026 : GA release
+```
+
 ## Notes
 
 - No WASM or Docattice Web server is required.
