@@ -136,15 +136,30 @@
       .find((href) => /\/raw\//.test(href) && /\.(md|markdown)(\?|#|$)/i.test(href))
     if (rawLink) return rawLink
 
-    const match = window.location.pathname.match(/^\/([^/]+)\/([^/]+)\/blob\/(.+)$/)
-    if (!match) return null
-    const [, owner, repo, rest] = match
-    const parts = rest.split('/')
-    const mdIndex = parts.findIndex((part) => /\.(md|markdown)$/i.test(part))
-    if (mdIndex <= 0) return null
-    const ref = parts.slice(0, mdIndex).join('/')
-    const pathPart = parts.slice(mdIndex).join('/')
-    return `/${owner}/${repo}/raw/${ref}/${pathPart}`
+    const blobMatch = window.location.pathname.match(/^\/([^/]+)\/([^/]+)\/blob\/(.+)$/)
+    if (blobMatch) {
+      const [, owner, repo, rest] = blobMatch
+      const parts = rest.split('/')
+      const mdIndex = parts.findIndex((part) => /\.(md|markdown)$/i.test(part))
+      if (mdIndex <= 0) return null
+      const ref = parts.slice(0, mdIndex).join('/')
+      const pathPart = parts.slice(mdIndex).join('/')
+      return `/${owner}/${repo}/raw/${ref}/${pathPart}`
+    }
+
+    const repoRootMatch = window.location.pathname.match(/^\/([^/]+)\/([^/]+)\/?$/)
+    if (repoRootMatch) {
+      const [, owner, repo] = repoRootMatch
+      return `/${owner}/${repo}/raw/HEAD/README.md`
+    }
+
+    const treeMatch = window.location.pathname.match(/^\/([^/]+)\/([^/]+)\/tree\/(.+)$/)
+    if (treeMatch) {
+      const [, owner, repo, refAndPath] = treeMatch
+      return `/${owner}/${repo}/raw/${refAndPath}/README.md`
+    }
+
+    return null
   }
 
   async function loadRawMarkdownSources() {
