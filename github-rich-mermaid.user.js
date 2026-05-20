@@ -1425,7 +1425,7 @@
     return false
   }
 
-  function routeC4Relation(rel, from, to, occupiedSegments = [], obstacles = [], allowedRegion = null, displayLabel = '', sourcePortOffset = { x: 0, y: 0 }, targetPortOffset = { x: 0, y: 0 }) {
+  function routeC4Relation(rel, from, to, occupiedSegments = [], obstacles = [], allowedRegion = null, displayLabel = '', sourcePortOffset = { x: 0, y: 0 }, targetPortOffset = { x: 0, y: 0 }, routeHints = {}) {
     const [fromSide, toSide] = c4RelationSides(rel, from, to)
     const start = anchorOnBox(from, fromSide)
     const end = anchorOnBox(to, toSide)
@@ -1434,8 +1434,11 @@
     end.x += targetPortOffset.x || 0
     end.y += targetPortOffset.y || 0
     if ((fromSide === 'bottom' || fromSide === 'top') && (toSide === 'bottom' || toSide === 'top')) {
-      if (start.x >= to.x + 28 && start.x <= to.x + to.w - 28) end.x = start.x
-      else if (end.x >= from.x + 28 && end.x <= from.x + from.w - 28) start.x = end.x
+      const hasSourcePortOffset = Math.abs(sourcePortOffset.x || 0) > 0.1
+      const hasTargetPortOffset = Math.abs(targetPortOffset.x || 0) > 0.1
+      const preserveTargetPortOffset = !!routeHints.preserveTargetPortOffset
+      if ((!hasTargetPortOffset || !preserveTargetPortOffset) && start.x >= to.x + 28 && start.x <= to.x + to.w - 28) end.x = start.x
+      else if (!hasSourcePortOffset && (!hasTargetPortOffset || !preserveTargetPortOffset) && end.x >= from.x + 28 && end.x <= from.x + from.w - 28) start.x = end.x
     }
     const sv = sideVector(fromSide)
     const ev = sideVector(toSide)
@@ -1474,6 +1477,7 @@
       obstacles.forEach((rectValue) => {
         axisCandidates.push(rectValue.left - 16, rectValue.right + 16)
       })
+      ;(routeHints.verticalAxes || []).forEach((axis) => axisCandidates.push(axis))
       occupiedSegments.filter((seg) => seg.orientation === 'vertical').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
         if (seg.axis >= Math.min(start.x, end.x) - 0.1 && seg.axis <= Math.max(start.x, end.x) + 0.1) {
@@ -1487,12 +1491,13 @@
       ;[...new Set(axisCandidates.map((value) => Math.round(value * 10) / 10))]
         .filter((axis) => !allowedRegion || (axis >= allowedRegion.left && axis <= allowedRegion.right))
         .forEach((axis) => {
+          const axisBias = (routeHints.verticalAxes || []).some((value) => Math.abs(value - axis) < 0.1) ? -96 : 0
           ;[...new Set(startTurnYs.map((value) => Math.round(value * 10) / 10))]
             .filter((turnY) => !allowedRegion || (turnY >= allowedRegion.top && turnY <= allowedRegion.bottom))
             .forEach((startTurnY) => {
               ;[...new Set(endTurnYs.map((value) => Math.round(value * 10) / 10))]
                 .filter((turnY) => !allowedRegion || (turnY >= allowedRegion.top && turnY <= allowedRegion.bottom))
-                .forEach((endTurnY) => pushCandidate(routeViaVerticalAxis(start, end, axis, startTurnY, endTurnY), Math.abs(axis - end.x) * 0.4 + Math.abs(startTurnY - baseStartY) * 1.2 + Math.abs(endTurnY - baseEndY) * 0.8))
+                .forEach((endTurnY) => pushCandidate(routeViaVerticalAxis(start, end, axis, startTurnY, endTurnY), axisBias + Math.abs(axis - end.x) * 0.4 + Math.abs(startTurnY - baseStartY) * 1.2 + Math.abs(endTurnY - baseEndY) * 0.8))
             })
         })
     } else {
@@ -1514,6 +1519,7 @@
       obstacles.forEach((rectValue) => {
         axisCandidates.push(rectValue.top - 16, rectValue.bottom + 16)
       })
+      ;(routeHints.horizontalAxes || []).forEach((axis) => axisCandidates.push(axis))
       occupiedSegments.filter((seg) => seg.orientation === 'horizontal').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
         if (seg.axis >= Math.min(start.y, end.y) - 0.1 && seg.axis <= Math.max(start.y, end.y) + 0.1) {
@@ -1527,12 +1533,13 @@
       ;[...new Set(axisCandidates.map((value) => Math.round(value * 10) / 10))]
         .filter((axis) => !allowedRegion || (axis >= allowedRegion.top && axis <= allowedRegion.bottom))
         .forEach((axis) => {
+          const axisBias = (routeHints.horizontalAxes || []).some((value) => Math.abs(value - axis) < 0.1) ? -96 : 0
           ;[...new Set(startTurnXs.map((value) => Math.round(value * 10) / 10))]
             .filter((turnX) => !allowedRegion || (turnX >= allowedRegion.left && turnX <= allowedRegion.right))
             .forEach((startTurnX) => {
               ;[...new Set(endTurnXs.map((value) => Math.round(value * 10) / 10))]
                 .filter((turnX) => !allowedRegion || (turnX >= allowedRegion.left && turnX <= allowedRegion.right))
-                .forEach((endTurnX) => pushCandidate(routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX), Math.abs(axis - end.y) * 0.4 + Math.abs(startTurnX - baseStartX) * 1.2 + Math.abs(endTurnX - baseEndX) * 0.8))
+                .forEach((endTurnX) => pushCandidate(routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX), axisBias + Math.abs(axis - end.y) * 0.4 + Math.abs(startTurnX - baseStartX) * 1.2 + Math.abs(endTurnX - baseEndX) * 0.8))
             })
         })
     }
@@ -3262,6 +3269,17 @@
     return obstacles
   }
 
+  function c4RelationRouteHints(rel, model, scene) {
+    const hints = { verticalAxes: [], horizontalAxes: [] }
+    c4CrossedBoundaryIds(rel, model).forEach((id) => {
+      const box = scene.layouts.get(id)
+      if (!box) return
+      hints.verticalAxes.push(box.x - 16, box.x + box.w + 16)
+      hints.horizontalAxes.push(box.y + box.headerH - 16, box.y + box.h + 16)
+    })
+    return hints
+  }
+
   function c4BuildRelationCrossingReservations(item, model, scene) {
     if (!item.route) return []
     const routeSegments = c4SegmentsFromRoute(item.route.points)
@@ -3387,10 +3405,10 @@
   }
 
   function c4ExpectedTransitionSide(rel, kind) {
-    if (rel.direction === 'down') return kind === 'Exit' ? 'bottom' : ['top', 'left', 'right']
-    if (rel.direction === 'up') return kind === 'Exit' ? 'top' : ['bottom', 'left', 'right']
-    if (rel.direction === 'right') return kind === 'Exit' ? 'right' : ['left', 'top', 'bottom']
-    if (rel.direction === 'left') return kind === 'Exit' ? 'left' : ['right', 'top', 'bottom']
+    if (rel.direction === 'down') return kind === 'Exit' ? ['bottom', 'left', 'right'] : ['top', 'left', 'right']
+    if (rel.direction === 'up') return kind === 'Exit' ? ['top', 'left', 'right'] : ['bottom', 'left', 'right']
+    if (rel.direction === 'right') return kind === 'Exit' ? ['right', 'top', 'bottom'] : ['left', 'top', 'bottom']
+    if (rel.direction === 'left') return kind === 'Exit' ? ['left', 'top', 'bottom'] : ['right', 'top', 'bottom']
     return null
   }
 
@@ -3401,7 +3419,7 @@
     return plan.some((planned, index) => {
       const observed = actual[index]
       if (!observed) return true
-      if (planned.scopeId !== observed.scopeId || planned.kind !== observed.kind || planned.axisFamily !== observed.axisFamily) return true
+      if (planned.scopeId !== observed.scopeId || planned.kind !== observed.kind) return true
       const expectedSide = c4ExpectedTransitionSide(item.rel, planned.kind)
       if (Array.isArray(expectedSide)) return !expectedSide.includes(observed.side)
       return expectedSide ? observed.side !== expectedSide : false
@@ -3429,6 +3447,7 @@
         crossingReservations: [],
         sourcePortOffset: { x: 0, y: 0 },
         targetPortOffset: { x: 0, y: 0 },
+        routeHints: c4RelationRouteHints(rel, model, scene),
       }
     })
     const sourcePortOffsets = new Map()
@@ -3458,9 +3477,12 @@
       if (!faninGroups.has(faninKey)) faninGroups.set(faninKey, [])
       faninGroups.get(faninKey).push({
         relationIndex,
+        fromId: rel.from,
         sourceCenter: horizontal ? from.y + from.h / 2 : from.x + from.w / 2,
+        sourceTieBreak: horizontal ? from.x + from.w / 2 : from.y + from.h / 2,
         targetSpan: horizontal ? to.h : to.w,
         axis: horizontal ? 'y' : 'x',
+        direction: rel.direction,
       })
     })
     fanoutGroups.forEach((items) => {
@@ -3475,12 +3497,25 @@
     })
     faninGroups.forEach((items) => {
       if (items.length < 2) return
-      items.sort((left, right) => left.sourceCenter - right.sourceCenter || left.relationIndex - right.relationIndex)
+      items.sort((left, right) => {
+        if ((left.direction === 'down' || left.direction === 'up') && Math.abs(left.sourceTieBreak - right.sourceTieBreak) > 0.5) {
+          return (left.direction === 'up' ? right.sourceTieBreak - left.sourceTieBreak : left.sourceTieBreak - right.sourceTieBreak) || left.sourceCenter - right.sourceCenter || left.relationIndex - right.relationIndex
+        }
+        if ((left.direction === 'left' || left.direction === 'right') && Math.abs(left.sourceCenter - right.sourceCenter) <= 0.5) {
+          return (left.direction === 'left' ? right.sourceTieBreak - left.sourceTieBreak : left.sourceTieBreak - right.sourceTieBreak) || left.relationIndex - right.relationIndex
+        }
+        return left.sourceCenter - right.sourceCenter || left.relationIndex - right.relationIndex
+      })
       const pitch = Math.max(36, Math.min(42, 96 / Math.max(1, items.length - 1)))
       const maxOffset = Math.max(0, items[0].targetSpan / 2 - 28)
       const center = (items.length - 1) / 2
       items.forEach((item, index) => {
-        setPortOffset(targetPortOffsets, item.relationIndex, item.axis, Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch)))
+        const offset = Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch))
+        setPortOffset(targetPortOffsets, item.relationIndex, item.axis, offset)
+        const sourceFanout = fanoutGroups.get(`${item.fromId}:${item.direction}`)
+        if (item.axis === 'x' && Math.abs(offset) > 0.1 && sourceFanout && sourceFanout.length > 1) {
+          workItems[item.relationIndex].routeHints.preserveTargetPortOffset = true
+        }
       })
     })
     const orderedIndices = model.relations
@@ -3503,7 +3538,7 @@
       const toOffset = portOffsetValue(targetPortOffsets, relationIndex)
       item.sourcePortOffset = fromOffset
       item.targetPortOffset = toOffset
-      const route = from && to ? routeC4Relation(rel, from, to, occupiedSegments, obstacles, item.allowedRegion, item.displayLabel, fromOffset, toOffset) : null
+      const route = from && to ? routeC4Relation(rel, from, to, occupiedSegments, obstacles, item.allowedRegion, item.displayLabel, fromOffset, toOffset, item.routeHints) : null
       if (!route || !item) return
       item.route = { points: route, preferredLabelSegment: null }
       item.pathLength = c4PathLength(route)
@@ -3765,7 +3800,7 @@
             .filter((candidateItem) => candidateItem.relationIndex !== relationIndex && candidateItem.labelPlacement)
             .map((candidateItem) => c4ReservedLaneRectFromLabelRect(candidateItem.labelPlacement.rect)),
         )
-        const route = routeC4Relation(item.rel, from, to, otherSegments, routeObstacles, item.allowedRegion, item.displayLabel, item.sourcePortOffset, item.targetPortOffset)
+        const route = routeC4Relation(item.rel, from, to, otherSegments, routeObstacles, item.allowedRegion, item.displayLabel, item.sourcePortOffset, item.targetPortOffset, item.routeHints)
         item.route = route ? { points: route, preferredLabelSegment: null } : null
         item.pathLength = route ? c4PathLength(route) : 0
         item.routingState = route ? 'Routed' : 'Unroutable'

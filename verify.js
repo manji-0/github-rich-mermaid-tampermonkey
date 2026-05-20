@@ -115,6 +115,58 @@ const c4RegressionSamples = [
 
 const c4RustComplexScenarios = [
   {
+    name: 'twitter feed delivery port ordering minimizes crossings',
+    expectedNodes: ['user', 'platform', 'api', 'core', 'timeline', 'fanout', 'graph', 'media', 'postdb', 'homecache', 'blob'],
+    expectedRelationCount: 10,
+    parentChildren: [
+      ['platform', ['api', 'core', 'media', 'postdb', 'homecache', 'blob']],
+      ['core', ['timeline', 'fanout', 'graph']],
+    ],
+    source: `C4Container
+  title Twitter-like feed delivery
+  Person_Ext(user, "User", "Publishes posts and reads home timeline")
+  System_Boundary(platform, "Social Platform") {
+    Container(api, "API Gateway", "Edge API", "Authenticates requests and routes mobile/web traffic")
+    Container_Boundary(core, "Timeline Core") {
+      Container(timeline, "Timeline Service", "Go service", "Builds home timeline and hydrates posts")
+      Container(fanout, "Fanout Worker", "Async jobs", "Pushes new post ids into follower inboxes")
+      Container(graph, "Social Graph Service", "Graph API", "Resolves follows, blocks, and mutes")
+    }
+    Container(media, "Media Service", "Media pipeline", "Processes and serves image/video uploads")
+    ContainerDb(postdb, "Post Store", "Distributed KV", "Stores posts and author metadata")
+    ContainerDb(homecache, "Home Timeline Cache", "Redis", "Caches ranked home timelines")
+    ContainerDb(blob, "Media Blob Store", "Object storage", "Stores original and derived media assets")
+  }
+  Rel_R(user, api, "Publishes posts and loads timeline", "HTTPS")
+  Rel_D(api, timeline, "Queries timeline", "gRPC")
+  Rel_D(api, media, "Uploads media", "HTTPS")
+  Rel_D(api, homecache, "Reads warm timeline", "Redis")
+  Rel_R(timeline, graph, "Expands follow graph", "RPC")
+  Rel_D(timeline, postdb, "Reads post documents", "KV")
+  Rel_D(timeline, homecache, "Reads ranked timeline", "Redis")
+  Rel_R(fanout, graph, "Resolves followers", "RPC")
+  Rel_D(fanout, homecache, "Writes follower inboxes", "Redis")
+  Rel_D(media, blob, "Persists media", "S3 API")`,
+    checkRoutes({ workItems }) {
+      const apiHome = workItemFor(workItems, 'api', 'homecache')
+      const fanoutHome = workItemFor(workItems, 'fanout', 'homecache')
+      const timelineGraph = workItemFor(workItems, 'timeline', 'graph')
+      const fanoutGraph = workItemFor(workItems, 'fanout', 'graph')
+      const apiHomeEnd = apiHome.route.points.at(-1)
+      const fanoutHomeEnd = fanoutHome.route.points.at(-1)
+      const timelineGraphEnd = timelineGraph.route.points.at(-1)
+      const fanoutGraphEnd = fanoutGraph.route.points.at(-1)
+      if (!(apiHomeEnd.x < fanoutHomeEnd.x - 16)) {
+        throw new Error(`twitter homecache fan-in ports out of order: api=${apiHomeEnd.x.toFixed(1)} fanout=${fanoutHomeEnd.x.toFixed(1)}`)
+      }
+      if (!(fanoutGraphEnd.y < timelineGraphEnd.y - 16)) {
+        throw new Error(`twitter graph fan-in ports out of order: fanout=${fanoutGraphEnd.y.toFixed(1)} timeline=${timelineGraphEnd.y.toFixed(1)}`)
+      }
+      const totalCrossings = c4RouteCrossingCount(workItems)
+      if (totalCrossings > 1) throw new Error(`twitter feed routes still have avoidable crossings: ${totalCrossings}`)
+    },
+  },
+  {
     name: 'complex ecommerce checkout flow',
     expectedNodes: ['buyer', 'payment_gw', 'api_gw', 'order_svc', 'inv_svc', 'notif_svc', 'order_db', 'inv_db'],
     expectedRelationCount: 7,
@@ -140,6 +192,14 @@ const c4RustComplexScenarios = [
   Rel_D(order_svc, order_db, "Persists", "SQL")
   Rel_D(inv_svc, inv_db, "Updates stock", "SQL")
   Rel_D(api_gw, payment_gw, "Charges card", "HTTPS")`,
+    checkRoutes({ scene, workItems }) {
+      const platform = scene.layouts.get('platform')
+      const paymentRoute = workItemFor(workItems, 'api_gw', 'payment_gw').route.points
+      const lane = longestVerticalAxis(paymentRoute)
+      if (!(lane > platform.x + platform.w + 4)) {
+        throw new Error(`external payment route should leave platform boundary: lane=${lane?.toFixed(1)} platformRight=${(platform.x + platform.w).toFixed(1)}`)
+      }
+    },
   },
   {
     name: 'complex diamond shared stores',
@@ -2715,6 +2775,17 @@ function orthogonalPathCrossingCount(leftPoints, rightPoints) {
       ) {
         count += 1
       }
+    }
+  }
+  return count
+}
+
+function c4RouteCrossingCount(workItems) {
+  const routed = workItems.filter((item) => item.route)
+  let count = 0
+  for (let leftIndex = 0; leftIndex < routed.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < routed.length; rightIndex += 1) {
+      count += orthogonalPathCrossingCount(routed[leftIndex].route.points, routed[rightIndex].route.points)
     }
   }
   return count
