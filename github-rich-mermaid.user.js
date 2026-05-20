@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         GitHub Mermaid Rich Renderer
 // @namespace    https://github.com/manji-0/github-mermaid-rich-renderer
-// @version      0.3.0
+// @version      0.3.1
 // @description  Replace GitHub Markdown preview Mermaid diagrams with a Rich-style SVG renderer.
 // @author       manji0
 // @match        https://github.com/*
 // @run-at       document-start
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/manji-0/github-rich-mermaid-tampermonkey/main/github-rich-mermaid.user.js
+// @downloadURL  https://raw.githubusercontent.com/manji-0/github-rich-mermaid-tampermonkey/main/github-rich-mermaid.user.js
 // ==/UserScript==
 
 (() => {
@@ -131,12 +133,11 @@
   }
 
   function sourceFromRenderSection(section) {
-    // data-plain on js-render-enrichment-target: HTML attrs decoded by browser, giving clean source
+    // 1. data-plain on .js-render-enrichment-target (post-enrichment state)
     const target = section.querySelector?.('.js-render-enrichment-target')
     if (target) {
       const plain = target.getAttribute('data-plain') || ''
       if (supportedDiagramType(plain)) { rememberMermaidSource(plain); return plain }
-      // data-json fallback: {"data":"<html-encoded source>"}
       const dataJson = target.getAttribute('data-json')
       if (dataJson) {
         try {
@@ -146,7 +147,16 @@
         } catch (_) {}
       }
     }
-    // pre[lang="mermaid"] textContent: browser decodes HTML entities automatically
+    // 2. data-plain directly on the section element (pre-enrichment state)
+    const sectionPlain = decodeHtmlEntities(section.getAttribute('data-plain') || '')
+    if (supportedDiagramType(sectionPlain)) { rememberMermaidSource(sectionPlain); return sectionPlain }
+    // 3. iframe data-content inside section (enrichment complete, iframe has JSON payload)
+    const iframe = section.querySelector?.('iframe[data-content]')
+    if (iframe) {
+      const src = sourceFromGitHubDataContent(iframe)
+      if (src) return src
+    }
+    // 4. pre[lang="mermaid"] fallback
     const pre = section.querySelector?.('pre[lang="mermaid"]')
     if (pre) {
       const source = pre.textContent?.trim() || ''
@@ -5158,6 +5168,16 @@
       }
       return
     }
+    // When GitHub adds .js-render-enrichment-target (with data-plain) to a section,
+    // try the parent section immediately instead of waiting for the scheduled scan.
+    if (node.matches?.('.js-render-enrichment-target')) {
+      const section = node.closest('section.js-render-needs-enrichment, section.render-needs-enrichment')
+      if (section && !section.getAttribute(ENHANCED_ATTR)) {
+        const source = sourceFromRenderSection(section)
+        if (source) enqueueRender(section, source)
+        return
+      }
+    }
     scanCodeBlocks(node)
     scanMermaidElements(node)
   }
@@ -5233,12 +5253,30 @@
     observer = new MutationObserver((mutations) => {
       let shouldScan = false
       for (const mutation of mutations) {
-        mutation.addedNodes.forEach((node) => scanNodeNow(node))
-        if (mutation.addedNodes.length > 0) shouldScan = true
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node) => scanNodeNow(node))
+          if (mutation.addedNodes.length > 0) shouldScan = true
+        } else if (mutation.type === 'attributes') {
+          // data-plain was added/changed — try the owning section immediately
+          const el = mutation.target
+          const section = el.matches?.('section.js-render-needs-enrichment, section.render-needs-enrichment')
+            ? el
+            : el.closest?.('section.js-render-needs-enrichment, section.render-needs-enrichment')
+          if (section && !section.getAttribute(ENHANCED_ATTR)) {
+            const source = sourceFromRenderSection(section)
+            if (source) enqueueRender(section, source)
+          }
+          shouldScan = true
+        }
       }
       if (shouldScan) scheduleScan()
     })
-    observer.observe(document.documentElement, { childList: true, subtree: true })
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-plain', 'data-json', 'data-content'],
+    })
   }
 
   function bootstrap() {
