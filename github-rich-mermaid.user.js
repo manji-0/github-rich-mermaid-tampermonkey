@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Mermaid Rich Renderer
 // @namespace    https://github.com/manji-0/github-mermaid-rich-renderer
-// @version      0.3.2
+// @version      0.3.3
 // @description  Replace GitHub Markdown preview Mermaid diagrams with a Rich-style SVG renderer.
 // @author       manji0
 // @match        https://github.com/*
@@ -13,6 +13,8 @@
 
 (() => {
   'use strict'
+
+  console.log('[mermaid-rich] script loaded, readyState:', document.readyState)
 
   const ENHANCED_ATTR = 'data-docattice-mermaid-enhanced'
   const ERROR_ATTR = 'data-docattice-mermaid-error'
@@ -5307,6 +5309,7 @@
   }
 
   function bootstrap() {
+    console.log('[mermaid-rich] bootstrap')
     installStyles()
     startObserver()
     loadRawMarkdownSources()
@@ -5314,6 +5317,7 @@
   }
 
   if (document.readyState === 'loading') {
+    console.log('[mermaid-rich] waiting for DOMContentLoaded')
     document.addEventListener('DOMContentLoaded', bootstrap, { once: true })
     startObserver()
   } else {
