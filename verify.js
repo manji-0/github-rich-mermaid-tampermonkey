@@ -40,7 +40,7 @@ const galleryViewBoxExpectations = [
   { index: 2, type: 'sequenceDiagram', viewBox: '0 0 520.0 240.0' },
   { index: 3, type: 'classDiagram', viewBox: '0 0 468.5 216.0' },
   { index: 4, type: 'stateDiagram-v2', viewBox: '0 0 300.0 536.0' },
-  { index: 5, type: 'erDiagram', viewBox: '0 0 300.0 304.0' },
+  { index: 5, type: 'erDiagram', viewBox: '0 0 300.0 344.0' },
   { index: 6, type: 'journey', title: 'Draft save experience', viewBox: '0 0 920.0 674.0' },
   { index: 7, type: 'gantt', title: 'MVP rollout', viewBox: '0 0 720.0 378.0' },
   { index: 8, type: 'pie', title: 'Dependency kinds', viewBox: '0 0 900.0 494.0' },
@@ -1119,6 +1119,10 @@ const erRustSamples = [
       assertIncludes(svg, '>int published_revision</text>', this.name)
       const doc = erEntityBounds(svg, 'DOCUMENT')
       if (Math.abs(doc.w - 200) > 0.1) throw new Error(`ER entity width should match Rust 200px, got ${doc.w}`)
+      const headerY = svgTextY(erEntityGroup(svg, 'DOCUMENT'), 'DOCUMENT')
+      const lastFieldY = svgTextY(erEntityGroup(svg, 'DOCUMENT'), 'int published_revision')
+      if (Math.abs(headerY - (doc.y + 16)) > 0.1) throw new Error(`ER header text should be vertically centered: ${headerY}/${doc.y + 16}`)
+      if (lastFieldY > doc.y + doc.h - 16) throw new Error(`ER field text should keep bottom padding: ${lastFieldY}/${doc.y + doc.h}`)
     },
   },
   {
@@ -1934,6 +1938,11 @@ function assertGalleryViewBoxes(renderer, galleryBlocks) {
     if (type === 'architecture-beta') {
       assertArchitectureRoutesAvoidNodeBodies(renderer.renderMermaidSvg(source), `gallery #${expected.index} architecture-beta`)
     }
+    if (type === 'stateDiagram-v2') {
+      const svg = renderer.renderMermaidSvg(source)
+      assertPillTextCentered(svg, 'analyze ok', `gallery #${expected.index} state label`)
+      assertPillTextCentered(svg, 'publish', `gallery #${expected.index} state label`)
+    }
   })
 }
 
@@ -2166,6 +2175,29 @@ function assertGitHubReplacementShell(renderer) {
 function svgAttrValue(snippet, attrName) {
   const match = snippet.match(new RegExp(`${attrName}="([^"]+)"`))
   return match?.[1] ?? null
+}
+
+function svgTextY(svg, content) {
+  const escaped = content.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = svg.match(new RegExp(`<text\\b[^>]*y="([^"]+)"[^>]*>${escaped}</text>`))
+  if (!match) throw new Error(`missing SVG text ${content}`)
+  return Number(match[1])
+}
+
+function assertPillTextCentered(svg, content, label) {
+  const escaped = content.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const textMatch = new RegExp(`<text\\b([^>]*)>${escaped}</text>`).exec(svg)
+  if (!textMatch) throw new Error(`${label}: missing label text ${content}`)
+  const textStart = textMatch.index
+  const textY = Number(svgAttrValue(textMatch[0], 'y'))
+  const rectMatches = [...svg.slice(0, textStart).matchAll(/<rect\b[^>]*height="20(?:\.0)?"[^>]*>/g)]
+  const rectTag = rectMatches.at(-1)?.[0]
+  if (!rectTag) throw new Error(`${label}: missing pill background for ${content}`)
+  const rectY = Number(svgAttrValue(rectTag, 'y'))
+  const rectH = Number(svgAttrValue(rectTag, 'height'))
+  if (Math.abs(textY - (rectY + rectH / 2)) > 0.1) {
+    throw new Error(`${label}: pill text ${content} not centered ${textY}/${rectY + rectH / 2}`)
+  }
 }
 
 function svgGroupAt(svg, start) {

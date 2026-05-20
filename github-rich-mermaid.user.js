@@ -2473,7 +2473,8 @@
         ? (() => {
             const labelW = c4EstimateTextWidth(edge.label, 11, 500) + 10
             const labelH = 18
-            return `${rect(mid.x - labelW / 2, mid.y - labelH - 14, labelW, labelH, 4, t.surface, t.border)}${text(mid.x, mid.y - 15, edge.label, 11, 500, t.muted)}`
+            const labelY = mid.y - labelH - 14
+            return `${rect(mid.x - labelW / 2, labelY, labelW, labelH, 4, t.surface, t.border)}${text(mid.x, labelY + labelH / 2, edge.label, 11, 500, t.muted)}`
         })()
         : ''
       const dashed = edge.style === 'dotted'
@@ -3989,6 +3990,7 @@
       entityW: 200,
       headerH: 32,
       rowH: 22,
+      bodyPadY: 10,
       minH: 54,
       rx: 4,
       textSize: 12,
@@ -4081,7 +4083,7 @@
       }
     }
     const names = entityOrder
-    const sizes = new Map(names.map((name) => [name, { w: E.entityW, h: Math.max(E.minH, E.headerH + entities.get(name).length * E.rowH) }]))
+    const sizes = new Map(names.map((name) => [name, { w: E.entityW, h: Math.max(E.minH, E.headerH + E.bodyPadY * 2 + entities.get(name).length * E.rowH) }]))
     const rankConstraints = []
     rels.forEach((rel) => pushUniqueConstraint(rankConstraints, rel.from, rel.to))
     const layout = buildLayeredLayout({
@@ -4206,7 +4208,8 @@
       const label = rel.label
         ? (() => {
             const labelW = c4EstimateTextWidth(rel.label, 11, 500) + 14
-            return `<rect x="${(mid.x - labelW / 2).toFixed(1)}" y="${(mid.y - 24).toFixed(1)}" width="${labelW.toFixed(1)}" height="20" rx="10" fill="${t.surface}" stroke="${t.border}" stroke-width="1"/>${text(mid.x, mid.y - 10, rel.label, 11, 500, t.muted)}`
+            const labelY = mid.y - 24
+            return `<rect x="${(mid.x - labelW / 2).toFixed(1)}" y="${labelY.toFixed(1)}" width="${labelW.toFixed(1)}" height="20" rx="10" fill="${t.surface}" stroke="${t.border}" stroke-width="1"/>${text(mid.x, labelY + 10, rel.label, 11, 500, t.muted)}`
           })()
         : ''
       return `<g data-er-rel="${dataAttr(`${rel.from}->${rel.to}`)}"><path d="${attr(d)}" fill="none" stroke="${t.link}" stroke-width="2"${dash} stroke-linecap="round" stroke-linejoin="round"/>${erCardinalityMarker(start, sides[0], rel.fromCard)}${erCardinalityMarker(end, sides[1], rel.toCard)}</g>${label}`
@@ -4216,7 +4219,7 @@
       const color = key === 'PK' ? t.success : key === 'FK' ? t.accent : t.warn
       const badgeW = c4EstimateTextWidth(key, E.textSize - 1, 700) + 10
       return {
-        markup: `<rect x="${x - 3}" y="${y - 12}" width="${badgeW.toFixed(1)}" height="15" rx="3" fill="${color}" fill-opacity="0.18" stroke="none"/>${text(x, y - 1, key, E.textSize - 1, 700, color, 'start')}`,
+        markup: `<rect x="${x - 3}" y="${(y - 7.5).toFixed(1)}" width="${badgeW.toFixed(1)}" height="15" rx="3" fill="${color}" fill-opacity="0.18" stroke="none"/>${text(x, y, key, E.textSize - 1, 700, color, 'start')}`,
         width: badgeW + 4,
       }
     }
@@ -4225,14 +4228,14 @@
       const p = positions.get(name)
       const headerTint = [t.accent, t.success, t.warn, t.danger, t.muted][colorIndex % 5]
       const rows = fields.map((field, rowIndex) => {
-        const rowY = p.y + E.headerH + rowIndex * E.rowH
-        const textY = rowY + E.rowH / 2 + E.textSize / 2 - 1
+        const rowY = p.y + E.headerH + E.bodyPadY + rowIndex * E.rowH
+        const textY = rowY + E.rowH / 2
         const badge = erBadge(p.x + 12, textY, field.key)
         const attrText = `${field.type} ${field.name}`
         const comment = field.comment ? text(p.x + p.w - 8, textY, field.comment, 11, 400, t.muted, 'end') : ''
         return `${badge.markup}${text(p.x + 12 + badge.width, textY, attrText, E.textSize, 400, t.text, 'start')}${comment}`
       }).join('')
-      return `<g data-er-entity="${attr(name)}">${rect(p.x, p.y, p.w, p.h, E.rx, t.surface, t.border)}<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${E.headerH}" rx="${E.rx}" fill="${t.surfaceAlt}" stroke="none"/><rect x="${p.x}" y="${p.y + E.headerH - E.rx}" width="${p.w}" height="${E.rx}" fill="${t.surfaceAlt}" stroke="none"/><rect x="${p.x + 0.5}" y="${p.y + 0.5}" width="${p.w - 1}" height="${E.headerH - 1}" fill="${headerTint}" fill-opacity="0.15" stroke="none"/>${line(p.x, p.y + E.headerH, p.x + p.w, p.y + E.headerH, t.border)}${text(p.x + p.w / 2, p.y + E.headerH / 2 + E.headerTextSize / 2 - 1, name, E.headerTextSize, 700, t.text)}${rows}</g>`
+      return `<g data-er-entity="${attr(name)}">${rect(p.x, p.y, p.w, p.h, E.rx, t.surface, t.border)}<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${E.headerH}" rx="${E.rx}" fill="${t.surfaceAlt}" stroke="none"/><rect x="${p.x}" y="${p.y + E.headerH - E.rx}" width="${p.w}" height="${E.rx}" fill="${t.surfaceAlt}" stroke="none"/><rect x="${p.x + 0.5}" y="${p.y + 0.5}" width="${p.w - 1}" height="${E.headerH - 1}" fill="${headerTint}" fill-opacity="0.15" stroke="none"/>${line(p.x, p.y + E.headerH, p.x + p.w, p.y + E.headerH, t.border)}${text(p.x + p.w / 2, p.y + E.headerH / 2, name, E.headerTextSize, 700, t.text)}${rows}</g>`
     }).join('')
     return rustSvg(width, height, `${entityMarkup}${relMarkup}`, 'ER diagram')
   }
@@ -5970,11 +5973,11 @@
     if (best.horizontal) {
       const lx = best.midpoint.x - labelW / 2
       const ly = best.midpoint.y - labelH - 4
-      return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${text(best.midpoint.x, ly + 14, label, 11, 500, t.muted)}`
+      return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${text(best.midpoint.x, ly + labelH / 2, label, 11, 500, t.muted)}`
     }
     const lx = best.midpoint.x + 6
     const ly = best.midpoint.y - labelH / 2
-    return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${c4Text(lx + 7, ly + 14, label, 11, 500, t.muted)}`
+    return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${text(lx + 7, ly + labelH / 2, label, 11, 500, t.muted, 'start')}`
   }
 
   function renderStateDiagram(source) {
