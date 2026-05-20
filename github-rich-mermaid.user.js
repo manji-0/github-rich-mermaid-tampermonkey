@@ -1863,14 +1863,16 @@
             })
           }
         }
-        for (const xOffset of [0, -18, 18, -42, 42, -74, 74, -108, 108]) {
+        const selfSegment = [{ orientation: 'vertical', axis: seg.a.x, start: minY, end: maxY }]
+        for (const xOffset of [-74, 74, -108, 108, -42, 42, -144, 144]) {
           for (const yOffset of [0, -36, 36, -64, 64]) {
             const center = { x: cx + xOffset, y: cy + yOffset }
             const placement = c4LabelPlacementFromCenter(center, label)
+            if (!c4LabelHasRouteClearance(c4MinRectClearanceToSegments(placement.rect, selfSegment))) continue
             if (allowedRegion && !c4RectInside(placement.rect, allowedRegion)) continue
             if (forbiddenRects.some((rectValue) => c4RectsIntersect(placement.rect, rectValue))) continue
             const clearance = c4MinRectClearanceToSegments(placement.rect, occupiedSegments)
-            const candidate = { placement, score: 520 + (Math.abs(xOffset) + Math.abs(yOffset)) * 1.4 + c4LabelClearancePenalty(clearance), segmentIndex: seg.index }
+            const candidate = { placement, score: 620 + (Math.abs(xOffset) + Math.abs(yOffset)) * 1.4 + c4LabelClearancePenalty(clearance), segmentIndex: seg.index }
             if (!c4LabelHasRouteClearance(clearance)) fallbackCandidates.push({ ...candidate, score: candidate.score + 10000 })
             else candidates.push(candidate)
           }
@@ -1888,7 +1890,7 @@
     return candidates.find((candidate) => occupiedRects.every((rectValue) => !c4RectsIntersect(candidate.placement.rect, rectValue))) || null
   }
 
-  function c4PreferredVerticalLabelCandidate(item, occupiedRects, occupiedSegments = []) {
+  function c4PreferredVerticalLabelCandidate(item, occupiedRects, occupiedSegments = [], forbiddenRects = []) {
     if (!item.route || !['down', 'up'].includes(item.rel.direction)) return null
     const points = item.route.points
     if (!points || points.length < 2) return null
@@ -1896,23 +1898,26 @@
     if (Math.abs(segment.a.x - segment.b.x) > 0.1 || Math.abs(segment.a.y - segment.b.y) < 40) return null
     const sourceX = points[0].x
     const targetX = points[points.length - 1].x
-    const alignEnd = targetX < sourceX
+    const preferredAlignEnd = targetX < sourceX
     const size = c4LabelSize(item.displayLabel, 104)
     const minY = Math.min(segment.a.y, segment.b.y)
     const maxY = Math.max(segment.a.y, segment.b.y)
-    for (const ratio of [0.5, 0.42, 0.58, 0.34, 0.66]) {
-      const centerY = minY + (maxY - minY) * ratio
-      for (const [nearGap, farGap] of [[12, 20], [24, 32], [36, 44], [48, 58], [62, 76], [78, 94]]) {
-        const rectValue = alignEnd
-          ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x, bottom: centerY + size.height / 2 + 6 }
-          : { left: segment.a.x, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
-        const textRect = alignEnd
-          ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x - nearGap, bottom: centerY + size.height / 2 + 6 }
-          : { left: segment.a.x + nearGap, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
-        if (!c4RectInside(rectValue, item.allowedRegion)) continue
-        if (occupiedRects.some((occupied) => c4RectsIntersect(rectValue, occupied))) continue
-        if (!c4LabelHasRouteClearance(c4MinRectClearanceToSegments(rectValue, occupiedSegments))) continue
-        return { placement: { rect: rectValue, textRect, centered: false, alignEnd, lines: size.lines }, score: 0, segmentIndex: points.length - 2 }
+    for (const alignEnd of [preferredAlignEnd, !preferredAlignEnd]) {
+      for (const ratio of [0.5, 0.42, 0.58, 0.34, 0.66]) {
+        const centerY = minY + (maxY - minY) * ratio
+        for (const [nearGap, farGap] of [[12, 20], [24, 32], [36, 44], [48, 58], [62, 76], [78, 94]]) {
+          const rectValue = alignEnd
+            ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x, bottom: centerY + size.height / 2 + 6 }
+            : { left: segment.a.x, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
+          const textRect = alignEnd
+            ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x - nearGap, bottom: centerY + size.height / 2 + 6 }
+            : { left: segment.a.x + nearGap, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
+          if (!c4RectInside(rectValue, item.allowedRegion)) continue
+          if (forbiddenRects.some((forbidden) => c4RectsIntersect(rectValue, forbidden))) continue
+          if (occupiedRects.some((occupied) => c4RectsIntersect(rectValue, occupied))) continue
+          if (!c4LabelHasRouteClearance(c4MinRectClearanceToSegments(rectValue, occupiedSegments))) continue
+          return { placement: { rect: rectValue, textRect, centered: false, alignEnd, lines: size.lines }, score: 0, segmentIndex: points.length - 2 }
+        }
       }
     }
     return null
@@ -3750,14 +3755,14 @@
         const fallbackCandidates = candidates
         const relationPriority = model && scene ? c4RelationPriorityScore(item.relationIndex, item.rel, model, scene) : item.manhattanSpan
         const bestScore = fallbackCandidates[0]?.score ?? 500
-        return { item, candidates: fallbackCandidates, otherSegments, priority: relationPriority + item.manhattanSpan * 0.1 + (fallbackCandidates.length ? 80 / fallbackCandidates.length : 500) - bestScore * 0.05 }
+        return { item, candidates: fallbackCandidates, otherSegments, forbiddenRects, priority: relationPriority + item.manhattanSpan * 0.1 + (fallbackCandidates.length ? 80 / fallbackCandidates.length : 500) - bestScore * 0.05 }
       })
       .sort((a, b) => b.priority - a.priority || a.item.relationIndex - b.item.relationIndex)
     const laneRects = []
     const labelRects = []
     for (const pendingItem of pending) {
       let candidate = c4SelectLabelCandidate(pendingItem.candidates, laneRects) || c4SelectLabelCandidate(pendingItem.candidates, labelRects)
-      const verticalCandidate = c4PreferredVerticalLabelCandidate(pendingItem.item, laneRects, pendingItem.otherSegments)
+      const verticalCandidate = c4PreferredVerticalLabelCandidate(pendingItem.item, laneRects, pendingItem.otherSegments, pendingItem.forbiddenRects)
       if (verticalCandidate && (!candidate || candidate.placement.centered || candidate.placement.alignEnd !== verticalCandidate.placement.alignEnd)) {
         candidate = verticalCandidate
       }

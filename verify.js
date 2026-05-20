@@ -49,7 +49,7 @@ const galleryViewBoxExpectations = [
   { index: 11, type: 'gitGraph', title: '"Release Flow"', viewBox: '0 0 1900.0 400.0' },
   { index: 12, type: 'C4Container', title: 'Docattice Cloudflare delivery', viewBox: '0 0 1151.1 650.0' },
   { index: 13, type: 'C4Container', title: 'Twitter-like feed delivery', viewBox: '0 0 1878.5 1108.0' },
-  { index: 14, type: 'C4Container', title: 'E-commerce Checkout', viewBox: '0 0 1123.6 1324.0' },
+  { index: 14, type: 'C4Container', title: 'E-commerce Checkout', viewBox: '0 0 1097.6 1324.0' },
   { index: 15, type: 'C4Container', title: 'Diamond Topology', viewBox: '0 0 1046.1 584.0' },
   { index: 16, type: 'C4Container', title: 'Wide Fan-out', viewBox: '0 0 1194.0 750.0' },
   { index: 17, type: 'C4Component', title: 'Docattice worker internals', viewBox: '0 0 1495.1 988.0' },
