@@ -25,9 +25,13 @@
   const SUPPORTED_TYPES = new Set([
     'flowchart',
     'graph',
+    'classDiagram',
+    'classDiagram-v2',
     'C4Context',
     'C4Container',
     'C4Component',
+    'C4Code',
+    'architecture-beta',
     'erDiagram',
     'journey',
     'gantt',
@@ -39,21 +43,21 @@
     'timeline',
     'zenuml',
     'sequenceDiagram',
-  ])
-  const UNSUPPORTED_GITHUB_TYPES = new Set([
-    'architecture-beta',
+    'stateDiagram',
+    'stateDiagram-v2',
     'block-beta',
-    'C4Code',
-    'classDiagram',
     'kanban',
     'packet-beta',
     'radar-beta',
     'sankey',
-    'stateDiagram-v2',
+    'sankey-beta',
     'treemap-beta',
-    'venn',
     'venn-beta',
     'xychart',
+    'xychart-beta',
+  ])
+  const UNSUPPORTED_GITHUB_TYPES = new Set([
+    'venn',
   ])
 
   const stageCache = new Map()
@@ -133,7 +137,7 @@
       ['statediagramv2', 'stateDiagram-v2'],
       ['treemap', 'treemap-beta'],
       ['treemapbeta', 'treemap-beta'],
-      ['venn', 'venn'],
+      ['venn', 'venn-beta'],
       ['vennbeta', 'venn-beta'],
       ['xychart', 'xychart'],
     ])
@@ -154,6 +158,7 @@
   function shouldRenderSourceAtElement(element, source) {
     const headingType = mermaidHeadingDiagramType(nearestMarkdownHeadingText(element))
     if (headingType && UNSUPPORTED_GITHUB_TYPES.has(headingType)) return false
+    if (headingType && SUPPORTED_TYPES.has(headingType)) return detectMermaidDiagramType(source) === headingType
     return Boolean(supportedDiagramType(source))
   }
 
@@ -374,6 +379,17 @@
   function rustSvg(width, height, body, label = 'Mermaid extras diagram') {
     const t = theme()
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width.toFixed(1)} ${height.toFixed(1)}" width="${width.toFixed(1)}" height="${height.toFixed(1)}" role="img" aria-label="${attr(label)}" data-diagram-body-center-x="${(width / 2).toFixed(1)}" data-diagram-body-center-y="${(height / 2).toFixed(1)}" style="font-family:${UI_FONT}"><rect width="${width.toFixed(1)}" height="${height.toFixed(1)}" fill="${t.bg}"/><g data-diagram-body="true">${body}</g></svg>`
+  }
+
+  function analyticsSvgWithTitle(width, height, title, body) {
+    const t = theme()
+    const totalHeight = height + 64
+    const bodyMinX = 28
+    const bodyMaxX = width - 28
+    const bodyMinY = 28
+    const bodyMaxY = totalHeight - 42
+    const bottom = `${line(28, totalHeight - 42, width - 28, totalHeight - 42, t.grid)}${text(width / 2, totalHeight - 14, title, 18, 750, t.text)}`
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width.toFixed(1)} ${totalHeight.toFixed(1)}" width="${width.toFixed(1)}" height="${totalHeight.toFixed(1)}" role="img" aria-label="Mermaid analytics diagram" data-diagram-body-center-x="${((bodyMinX + bodyMaxX) / 2).toFixed(1)}" data-diagram-body-center-y="${((bodyMinY + bodyMaxY) / 2).toFixed(1)}" data-diagram-body-min-x="${bodyMinX.toFixed(1)}" data-diagram-body-max-x="${bodyMaxX.toFixed(1)}" data-diagram-body-min-y="${bodyMinY.toFixed(1)}" data-diagram-body-max-y="${bodyMaxY.toFixed(1)}" style="font-family:${UI_FONT}"><rect width="${width.toFixed(1)}" height="${totalHeight.toFixed(1)}" fill="${t.bg}"/>${line(28, 28, width - 28, 28, t.grid)}<g data-diagram-body="true">${body}</g>${bottom}</svg>`
   }
 
   function text(x, y, value, size = 13, weight = 500, color = theme().text, anchor = 'middle') {
@@ -1830,9 +1846,13 @@
     const renderers = {
       flowchart: renderFlowchart,
       graph: renderFlowchart,
+      classDiagram: renderClassDiagram,
+      'classDiagram-v2': renderClassDiagram,
       C4Context: renderC4Component,
       C4Container: renderC4Component,
       C4Component: renderC4Component,
+      C4Code: renderC4CodeDiagram,
+      'architecture-beta': renderArchitecture,
       erDiagram: renderErDiagram,
       journey: renderJourney,
       gantt: renderGantt,
@@ -1844,6 +1864,18 @@
       timeline: renderTimeline,
       zenuml: renderZenuml,
       sequenceDiagram: renderSequenceDiagram,
+      stateDiagram: renderStateDiagram,
+      'stateDiagram-v2': renderStateDiagram,
+      'block-beta': renderBlockDiagram,
+      kanban: renderKanban,
+      'packet-beta': renderPacket,
+      'radar-beta': renderRadar,
+      sankey: renderSankey,
+      'sankey-beta': renderSankey,
+      'treemap-beta': renderTreemap,
+      'venn-beta': renderVenn,
+      xychart: renderXyChart,
+      'xychart-beta': renderXyChart,
     }
     const rendered = renderers[diagramType](normalizedSource)
     stageCache.set(cacheKey, rendered)
@@ -4830,6 +4862,1409 @@
       body.push(centeredText((x1 + x2) / 2, y - 6, msg.label, 12, 650, t.text))
     })
     return rustSvgWithTitle(width, height, 'ZenUML', body.join(''), 'ZenUML')
+  }
+
+  function parseSquareNode(line) {
+    const split = String(line || '').indexOf('[')
+    if (split < 0 || !String(line).endsWith(']')) return null
+    return { id: line.slice(0, split).trim(), label: stripOuterQuotes(line.slice(split + 1, -1).trim()) }
+  }
+
+  function arrowLineSvg(x1, y1, x2, y2, stroke, dashed = false) {
+    const dash = dashed ? ' stroke-dasharray="7 5"' : ''
+    return `<g><line x1="${f1(x1)}" y1="${f1(y1)}" x2="${f1(x2)}" y2="${f1(y2)}" stroke="${stroke}" stroke-width="2"${dash}/>${rustArrowheadPath({ x: x1, y: y1 }, { x: x2, y: y2 }, stroke)}</g>`
+  }
+
+  function polylineArrowSvg(points, stroke, dashed = false) {
+    if (points.length < 2) return ''
+    const dash = dashed ? ' stroke-dasharray="7 5"' : ''
+    const d = points.map((p, index) => `${index ? 'L' : 'M'} ${f1(p.x)} ${f1(p.y)}`).join(' ')
+    return `<g><path d="${d}" fill="none" stroke="${stroke}" stroke-width="2"${dash} stroke-linecap="round" stroke-linejoin="round"/>${rustArrowheadPath(points[points.length - 2], points[points.length - 1], stroke)}</g>`
+  }
+
+  function contrastTextColor(fill) {
+    const t = theme()
+    const parseHex = (value) => {
+      const match = String(value || '').match(/^#([0-9a-f]{6})$/i)
+      if (!match) return null
+      return [0, 2, 4].map((offset) => Number.parseInt(match[1].slice(offset, offset + 2), 16))
+    }
+    const luminance = (rgb) => {
+      if (!rgb) return 0
+      const linear = rgb.map((channel) => {
+        const value = channel / 255
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      })
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+    const ratio = (left, right) => {
+      const l1 = luminance(parseHex(left))
+      const l2 = luminance(parseHex(right))
+      return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+    }
+    return ratio(fill, t.text) >= ratio(fill, t.surface) ? t.text : t.surface
+  }
+
+  function blockArrow(x1, y1, x2, y2, nodeW, nodeH, stroke) {
+    if (Math.abs(y1 - y2) < Number.EPSILON) {
+      return x1 <= x2
+        ? arrowLineSvg(x1 + nodeW, y1 + nodeH / 2, x2, y2 + nodeH / 2, stroke)
+        : arrowLineSvg(x1, y1 + nodeH / 2, x2 + nodeW, y2 + nodeH / 2, stroke)
+    }
+    const startX = x1 + nodeW / 2
+    const startY = y1 < y2 ? y1 + nodeH : y1
+    const endX = x2 + nodeW / 2
+    const endY = y1 < y2 ? y2 : y2 + nodeH
+    const midY = (startY + endY) / 2
+    return polylineArrowSvg([{ x: startX, y: startY }, { x: startX, y: midY }, { x: endX, y: midY }, { x: endX, y: endY }], stroke)
+  }
+
+  function renderBlockDiagram(source) {
+    const t = theme()
+    let cols = 3
+    const nodes = []
+    const edges = []
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('columns ')) cols = Math.max(1, Number.parseInt(row.slice('columns '.length).trim(), 10) || 3)
+      else if (row.includes('-->')) {
+        const parts = row.split('-->').map((part) => part.trim())
+        for (let index = 0; index + 1 < parts.length; index += 1) edges.push([parts[index], parts[index + 1]])
+      } else {
+        const node = parseSquareNode(row)
+        if (node) nodes.push(node)
+      }
+    })
+    if (!nodes.length) throw new Error('block-beta requires at least one node')
+    const width = 220 + cols * 200
+    const rows = Math.ceil(nodes.length / cols)
+    const height = 120 + rows * 104
+    const nodeW = 136
+    const nodeH = 52
+    const positions = new Map()
+    const body = []
+    nodes.forEach((node, index) => {
+      const x = 90 + (index % cols) * 200
+      const y = 106 + Math.floor(index / cols) * 104
+      positions.set(node.id, { x, y })
+      body.push(rect(x, y, nodeW, nodeH, 16, t.surfaceAlt, t.border))
+      body.push(text(x + nodeW / 2, y + 31, node.label, 13, 650, t.text))
+    })
+    edges.forEach(([from, to]) => {
+      const a = positions.get(from)
+      const b = positions.get(to)
+      if (a && b) body.push(blockArrow(a.x, a.y, b.x, b.y, nodeW, nodeH, t.link))
+    })
+    return rustSvgWithTitle(width, height, 'Block Diagram', body.join(''), 'Block diagram')
+  }
+
+  function sankeyBand(source, target, fill, opacity) {
+    const curve = Math.max((target.x - source.x) * 0.42, 48)
+    return `<path d="M ${f1(source.x)} ${f1(source.y1)} C ${f1(source.x + curve)} ${f1(source.y1)}, ${f1(target.x - curve)} ${f1(target.y1)}, ${f1(target.x)} ${f1(target.y1)} L ${f1(target.x)} ${f1(target.y2)} C ${f1(target.x - curve)} ${f1(target.y2)}, ${f1(source.x + curve)} ${f1(source.y2)}, ${f1(source.x)} ${f1(source.y2)} Z" fill="${fill}" fill-opacity="${Number(opacity).toFixed(2)}" stroke="none"/>`
+  }
+
+  function renderSankey(source) {
+    const t = theme()
+    const edges = []
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('source,target')) return
+      const parts = row.split(',').map((part) => part.trim())
+      if (parts.length === 3) edges.push({ source: parts[0], target: parts[1], value: Number(parts[2]) || 1 })
+    })
+    if (!edges.length) throw new Error('sankey requires at least one edge')
+    const nodeOrder = []
+    const incoming = new Map()
+    const outgoing = new Map()
+    const indegree = new Map()
+    const adjacency = new Map()
+    const addNode = (name) => { if (!nodeOrder.includes(name)) nodeOrder.push(name) }
+    edges.forEach((edge) => {
+      addNode(edge.source); addNode(edge.target)
+      outgoing.set(edge.source, (outgoing.get(edge.source) || 0) + edge.value)
+      incoming.set(edge.target, (incoming.get(edge.target) || 0) + edge.value)
+      if (!indegree.has(edge.source)) indegree.set(edge.source, 0)
+      indegree.set(edge.target, (indegree.get(edge.target) || 0) + 1)
+      if (!adjacency.has(edge.source)) adjacency.set(edge.source, [])
+      adjacency.get(edge.source).push(edge.target)
+    })
+    const layers = new Map()
+    const pending = new Map(indegree)
+    const queue = nodeOrder.filter((name) => (pending.get(name) || 0) === 0)
+    let cursor = 0
+    const processed = new Set()
+    while (processed.size < nodeOrder.length) {
+      if (cursor >= queue.length) {
+        const name = nodeOrder.find((candidate) => !processed.has(candidate))
+        if (!name) break
+        const fallback = Math.max(-1, ...edges.filter((edge) => edge.target === name).map((edge) => layers.get(edge.source)).filter((value) => value != null)) + 1
+        if (!layers.has(name)) layers.set(name, fallback)
+        queue.push(name)
+      }
+      const name = queue[cursor++]
+      if (processed.has(name)) continue
+      processed.add(name)
+      const layer = layers.get(name) || 0
+      ;(adjacency.get(name) || []).forEach((target) => {
+        layers.set(target, Math.max(layers.get(target) || 0, layer + 1))
+        pending.set(target, Math.max(0, (pending.get(target) || 0) - 1))
+        if ((pending.get(target) || 0) === 0) queue.push(target)
+      })
+    }
+    const byLayer = new Map()
+    const nodeFlow = new Map()
+    nodeOrder.forEach((name) => {
+      const layer = layers.get(name) || 0
+      if (!byLayer.has(layer)) byLayer.set(layer, [])
+      byLayer.get(layer).push(name)
+      nodeFlow.set(name, Math.max(incoming.get(name) || 0, outgoing.get(name) || 0, 1))
+    })
+    const layerKeys = [...byLayer.keys()].sort((a, b) => a - b)
+    const layerCount = Math.max(...layerKeys) + 1
+    const nodeW = 132
+    const width = Math.max(760 + Math.max(0, layerCount - 1) * 220, 900)
+    const height = 460
+    const top = 104
+    const bottom = height - 34
+    const availableH = bottom - top
+    const gapY = 24
+    const scale = Math.max(12, Math.min(32, Math.min(...[...byLayer.values()].map((names) => (Math.max(64, availableH - gapY * Math.max(0, names.length - 1)) / Math.max(1, names.reduce((sum, name) => sum + (nodeFlow.get(name) || 1), 0)))))))
+    const placements = new Map()
+    byLayer.forEach((names, layer) => {
+      const heights = names.map((name) => Math.max((nodeFlow.get(name) || 1) * scale, 28))
+      const totalH = heights.reduce((sum, value) => sum + value, 0) + gapY * Math.max(0, names.length - 1)
+      let y = top + Math.max(0, availableH - totalH) / 2
+      const x = layerCount === 1 ? (width - nodeW) / 2 : 96 + layer * ((width - 192 - nodeW) / (layerCount - 1))
+      names.forEach((name, index) => {
+        placements.set(name, { x, y, h: heights[index] })
+        y += heights[index] + gapY
+      })
+    })
+    const body = []
+    const sourceOffsets = new Map()
+    const targetOffsets = new Map()
+    nodeOrder.forEach((name) => {
+      const p = placements.get(name)
+      if (!p) return
+      sourceOffsets.set(name, Math.max(0, p.h - (outgoing.get(name) || 0) * scale) / 2)
+      targetOffsets.set(name, Math.max(0, p.h - (incoming.get(name) || 0) * scale) / 2)
+    })
+    edges.map((edge, index) => ({ edge, index })).sort((a, b) => (placements.get(a.edge.source)?.y || 0) - (placements.get(b.edge.source)?.y || 0) || (placements.get(a.edge.target)?.y || 0) - (placements.get(b.edge.target)?.y || 0)).forEach(({ edge }, colorIndex) => {
+      const sourceNode = placements.get(edge.source)
+      const targetNode = placements.get(edge.target)
+      if (!sourceNode || !targetNode) return
+      const thickness = Math.max(edge.value * scale, 10)
+      const sy1 = sourceNode.y + (sourceOffsets.get(edge.source) || 0)
+      const ty1 = targetNode.y + (targetOffsets.get(edge.target) || 0)
+      sourceOffsets.set(edge.source, (sourceOffsets.get(edge.source) || 0) + thickness)
+      targetOffsets.set(edge.target, (targetOffsets.get(edge.target) || 0) + thickness)
+      body.push(sankeyBand({ x: sourceNode.x + nodeW, y1: sy1, y2: sy1 + thickness }, { x: targetNode.x, y1: ty1, y2: ty1 + thickness }, rustPalette(colorIndex), 0.86))
+    })
+    nodeOrder.forEach((name) => {
+      const p = placements.get(name)
+      if (!p) return
+      body.push(rect(p.x, p.y, nodeW, p.h, 14, t.surfaceAlt, t.border))
+      body.push(c4Text(p.x + 16, p.y + p.h / 2 + 4, name, 12, 650, t.text))
+      body.push(c4Text(p.x + 16, p.y + p.h - 12, (nodeFlow.get(name) || 1).toFixed(0), 11, 500, t.muted))
+    })
+    return rustSvgWithTitle(width, height, 'Sankey', body.join(''), 'Sankey')
+  }
+
+  function renderPacket(source) {
+    const t = theme()
+    let title = ''
+    const fields = []
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('title')) title = stripOuterQuotes(row.slice('title'.length).trim())
+      else if (row.includes(':')) {
+        const [range, labelRaw] = row.split(/:(.+)/)
+        const [s, e] = range.trim().split('-')
+        const start = Number.parseInt(s, 10) || 0
+        const end = Number.parseInt(e, 10) || start
+        fields.push({ start, end, label: stripOuterQuotes(labelRaw.trim()) })
+      }
+    })
+    if (!fields.length) throw new Error('packet requires at least one field')
+    if (!title) title = 'Packet'
+    const bpr = 32
+    const maxBit = Math.max(...fields.map((field) => field.end), 31)
+    const numRows = Math.floor(maxBit / bpr) + 1
+    const rows = Array.from({ length: numRows }, () => [])
+    fields.forEach((field, idx) => {
+      const sr = Math.floor(field.start / bpr)
+      const er = Math.floor(field.end / bpr)
+      const rangeLabel = `${field.start}-${field.end}`
+      if (sr === er) rows[sr].push({ colStart: field.start % bpr, colEnd: field.end % bpr, label: field.label, rangeLabel, idx })
+      else {
+        rows[sr].push({ colStart: field.start % bpr, colEnd: bpr - 1, label: field.label, rangeLabel, idx })
+        for (let r = sr + 1; r < er; r += 1) rows[r].push({ colStart: 0, colEnd: bpr - 1, label: '', rangeLabel: '', idx })
+        rows[er].push({ colStart: 0, colEnd: field.end % bpr, label: '', rangeLabel: '', idx })
+      }
+    })
+    const bitW = 26, rowH = 36, hdrH = 28, gx = 48, gy = 16, gw = bpr * bitW
+    const width = gx + gw + 20
+    const height = gy + hdrH + numRows * rowH + 16
+    const body = []
+    for (let bit = 0; bit < bpr; bit += 1) body.push(text(gx + bit * bitW + bitW / 2, gy + hdrH - 10, String(bit), 9, 400, t.muted))
+    body.push(line(gx, gy + hdrH, gx + gw, gy + hdrH, t.border))
+    ;[0, 8, 16, 24, 32].forEach((oct) => body.push(`<line x1="${f1(gx + oct * bitW)}" y1="${f1(gy + hdrH - 4)}" x2="${f1(gx + oct * bitW)}" y2="${f1(gy + hdrH)}" stroke="${t.border}" stroke-width="1"/>`))
+    const bodyTop = gy + hdrH
+    const bodyBot = bodyTop + numRows * rowH
+    body.push(line(gx, bodyTop, gx, bodyBot, t.border))
+    body.push(line(gx + gw, bodyTop, gx + gw, bodyBot, t.border))
+    ;[8, 16, 24].forEach((oct) => body.push(`<line x1="${f1(gx + oct * bitW)}" y1="${f1(bodyTop)}" x2="${f1(gx + oct * bitW)}" y2="${f1(bodyBot)}" stroke="${t.muted}" stroke-width="0.5" stroke-dasharray="3 3" opacity="0.30"/>`))
+    rows.forEach((row, ri) => {
+      const ry = bodyTop + ri * rowH
+      body.push(`<text x="${f1(gx - 6)}" y="${f1(ry + rowH / 2 + 4)}" fill="${t.muted}" text-anchor="end" font-size="10" font-weight="500">${ri * bpr}</text>`)
+      row.forEach((field) => {
+        const fx = gx + field.colStart * bitW
+        const fw = (field.colEnd - field.colStart + 1) * bitW
+        const fill = rustPalette(field.idx)
+        const textFill = contrastTextColor(fill)
+        body.push(rect(fx, ry, fw, rowH, 2, fill, t.border))
+        if (field.label) {
+          const avail = fw - 8
+          const lw = analyticsEstimateTextWidth(field.label, 12, 600)
+          const fs = avail > 0 && lw > avail ? Math.max(12 * avail / lw, 8) : 12
+          const showRange = fw >= 52 && field.rangeLabel
+          body.push(text(fx + fw / 2, showRange ? ry + rowH / 2 : ry + rowH / 2 + 4, field.label, fs, 600, textFill))
+          if (showRange) body.push(text(fx + fw / 2, ry + rowH / 2 + 12, field.rangeLabel, 8, 400, textFill))
+        }
+      })
+      body.push(line(gx, ry + rowH, gx + gw, ry + rowH, t.border))
+    })
+    return rustSvgWithTitle(width, height, title, body.join(''), 'Packet')
+  }
+
+  function renderKanban(source) {
+    const t = theme()
+    const columns = []
+    let current = null
+    let columnIndent = null
+    source.split(/\r?\n/).slice(1).forEach((raw) => {
+      const trimmed = raw.trim()
+      if (!trimmed || trimmed.startsWith('%%')) return
+      const indent = raw.match(/^\s*/)[0].length
+      const isColumn = columnIndent == null ? (columnIndent = indent, true) : indent <= columnIndent
+      const node = parseSquareNode(trimmed)
+      const label = node ? node.label : trimmed
+      if (isColumn) {
+        if (current) columns.push(current)
+        current = { title: label, cards: [] }
+      } else if (current) current.cards.push(label)
+    })
+    if (current) columns.push(current)
+    if (!columns.length) throw new Error('kanban requires at least one column')
+    const colW = 220, gap = 24
+    const width = 60 + columns.length * (colW + gap)
+    const maxCards = Math.max(0, ...columns.map((column) => column.cards.length))
+    const height = 130 + maxCards * 94
+    const columnH = maxCards === 0 ? 60 : 34 + maxCards * 94
+    const body = []
+    columns.forEach((column, index) => {
+      const x = 36 + index * (colW + gap)
+      body.push(rect(x, 86, colW, columnH, 20, t.surfaceAlt, t.border))
+      body.push(c4Text(x + 18, 114, column.title, 15, 700, t.text))
+      column.cards.forEach((card, cardIndex) => {
+        const y = 132 + cardIndex * 94
+        body.push(rect(x + 14, y, colW - 28, 68, 16, t.surface, t.border))
+        c4WrapText(card, colW - 52, 12, 600).slice(0, 3).forEach((lineText, lineIndex) => {
+          body.push(c4Text(x + 28, y + 24 + lineIndex * 16, lineText, 12, 650, t.text))
+        })
+      })
+    })
+    return rustSvgWithTitle(width, height, 'Kanban', body.join(''), 'Kanban')
+  }
+
+  function renderTreemap(source) {
+    const t = theme()
+    let title = ''
+    const root = { label: '', value: 0, children: [] }
+    const stack = []
+    let baseIndent = null
+    const parentForDepth = (depth) => {
+      while (stack.length > depth) stack.pop()
+      let current = root
+      stack.forEach((index) => { current = current.children[index] })
+      return current
+    }
+    source.split(/\r?\n/).slice(1).forEach((raw) => {
+      const trimmed = raw.trim()
+      if (!trimmed || trimmed.startsWith('%%')) return
+      if (trimmed.startsWith('title')) {
+        title = stripOuterQuotes(trimmed.slice('title'.length).trim())
+        return
+      }
+      const indent = raw.match(/^\s*/)[0].length
+      if (baseIndent == null) baseIndent = indent
+      const depth = Math.floor(Math.max(0, indent - baseIndent) / 2)
+      const colon = trimmed.indexOf(':')
+      const entry = colon >= 0
+        ? { label: stripOuterQuotes(trimmed.slice(0, colon).trim()), value: Number(trimmed.slice(colon + 1).trim()) || 0, children: [] }
+        : { label: stripOuterQuotes(trimmed), value: 0, children: [] }
+      const parent = parentForDepth(depth)
+      parent.children.push(entry)
+      stack.push(parent.children.length - 1)
+    })
+    let tree = root.label === '' && root.children.length === 1 ? root.children[0] : root
+    if (!tree.label && !tree.children.length) throw new Error('treemap-beta requires at least one entry')
+    if (!title) title = 'Treemap'
+    const rollup = (node) => {
+      if (!node.children.length) {
+        node.value = Math.max(node.value, 1)
+        return node.value
+      }
+      node.value = Math.max(node.children.reduce((sum, child) => sum + rollup(child), 0), 1)
+      return node.value
+    }
+    rollup(tree)
+    const width = 900
+    const height = 480
+    let colorCounter = 0
+    const body = []
+    const layout = (node, area, vertical, branchColor, depth) => {
+      if (area.w <= 0 || area.h <= 0) return
+      const isLeaf = !node.children.length
+      if (depth === 0) body.push(rect(area.x, area.y, area.w, area.h, 4, t.surfaceAlt, t.border))
+      else {
+        const color = rustPalette(branchColor || 0)
+        body.push(`<rect x="${f1(area.x)}" y="${f1(area.y)}" width="${f1(area.w)}" height="${f1(area.h)}" rx="4.0" fill="${color}" fill-opacity="${isLeaf ? '0.38' : '0.14'}" stroke="${t.border}"/>`)
+      }
+      body.push(c4Text(area.x + 12, area.y + 20, node.label, 12, 700, t.text))
+      if (isLeaf) {
+        body.push(c4Text(area.x + 12, area.y + 38, node.value.toFixed(0), 11, 650, t.muted))
+        return
+      }
+      const content = { x: area.x + 8, y: area.y + 28, w: Math.max(0, area.w - 16), h: Math.max(0, area.h - 36) }
+      let offset = 0
+      node.children.forEach((child, index) => {
+        const childBranch = branchColor != null ? branchColor : colorCounter++
+        const ratio = child.value / Math.max(node.value, 1)
+        if (vertical) {
+          const remaining = Math.max(0, content.w - offset)
+          const childW = index + 1 === node.children.length ? remaining : content.w * ratio
+          layout(child, { x: content.x + offset, y: content.y, w: Math.min(childW, remaining), h: content.h }, !vertical, childBranch, depth + 1)
+          offset += childW
+        } else {
+          const remaining = Math.max(0, content.h - offset)
+          const childH = index + 1 === node.children.length ? remaining : content.h * ratio
+          layout(child, { x: content.x, y: content.y + offset, w: content.w, h: Math.min(childH, remaining) }, !vertical, childBranch, depth + 1)
+          offset += childH
+        }
+      })
+    }
+    layout(tree, { x: 34, y: 86, w: width - 68, h: height - 120 }, true, null, 0)
+    return rustSvgWithTitle(width, height, title, body.join(''), 'Treemap')
+  }
+
+  function parseClassIdentifier(raw, lineNumber = 0) {
+    const token = String(raw || '').trim().split(/\s+/, 1)[0].split('[', 1)[0].replace(/^["`]+|["`]+$/g, '').trim()
+    if (!token) throw new Error(`line ${lineNumber}: class identifier is required`)
+    return token
+  }
+
+  function parseClassEndpoint(raw, lineNumber) {
+    let cardinality = null
+    let cleaned = ''
+    const chars = Array.from(String(raw || ''))
+    for (let index = 0; index < chars.length; index += 1) {
+      const ch = chars[index]
+      if (ch === '"') {
+        let quoted = ''
+        index += 1
+        while (index < chars.length && chars[index] !== '"') {
+          quoted += chars[index]
+          index += 1
+        }
+        if (quoted.trim()) cardinality = quoted.trim()
+      } else cleaned += ch
+    }
+    return { id: parseClassIdentifier(cleaned.trim(), lineNumber), cardinality }
+  }
+
+  function parseClassRelation(row, lineNumber) {
+    const colon = row.indexOf(':')
+    const edge = (colon >= 0 ? row.slice(0, colon) : row).trim()
+    const label = colon >= 0 ? row.slice(colon + 1).trim() : ''
+    const operators = ['<|..', '..|>', '<|--', '--|>', '*--', '--*', 'o--', '--o', '<..', '..>', '<--', '-->', '..', '--']
+    for (const operator of operators) {
+      const pos = edge.indexOf(operator)
+      if (pos < 0) continue
+      const left = edge.slice(0, pos).trim()
+      const right = edge.slice(pos + operator.length).trim()
+      if (!left || !right) throw new Error(`line ${lineNumber}: invalid class relationship \`${row}\``)
+      const leftEndpoint = parseClassEndpoint(left, lineNumber)
+      const rightEndpoint = parseClassEndpoint(right, lineNumber)
+      const reverse = operator.includes('<') && !operator.includes('>')
+      return reverse
+        ? { from: rightEndpoint.id, to: leftEndpoint.id, fromCardinality: rightEndpoint.cardinality, toCardinality: leftEndpoint.cardinality, label: label || null, dashed: operator.includes('.') }
+        : { from: leftEndpoint.id, to: rightEndpoint.id, fromCardinality: leftEndpoint.cardinality, toCardinality: rightEndpoint.cardinality, label: label || null, dashed: operator.includes('.') }
+    }
+    return null
+  }
+
+  function parseClassDiagram(source) {
+    const rows = source.split(/\r?\n/).map((line, index) => ({ line: line.trim(), lineNumber: index + 1 })).filter((row) => row.line && !row.line.startsWith('%%'))
+    if (!rows.length) throw new Error('class diagram source is empty')
+    const directive = rows[0].line.split(/\s+/, 1)[0]
+    if (directive !== 'classDiagram' && directive !== 'classDiagram-v2') throw new Error(`line ${rows[0].lineNumber}: expected \`classDiagram\` as the first directive`)
+    const classes = []
+    const classIndex = new Map()
+    const relations = []
+    const registerClass = (id, members = []) => {
+      if (classIndex.has(id)) {
+        if (members.length) classes[classIndex.get(id)].members = members
+        return
+      }
+      classIndex.set(id, classes.length)
+      classes.push({ id, members })
+    }
+    let title = null
+    let direction = 'LR'
+    let index = 1
+    while (index < rows.length) {
+      const { line, lineNumber } = rows[index]
+      if (line.startsWith('direction ')) {
+        const raw = line.slice('direction '.length).trim()
+        if (!['LR', 'RL', 'TB', 'TD', 'BT'].includes(raw)) throw new Error(`line ${lineNumber}: unsupported class diagram direction \`${raw}\``)
+        direction = raw === 'TD' ? 'TB' : raw
+        index += 1
+        continue
+      }
+      if (line.startsWith('title ')) {
+        title = line.slice('title '.length).trim()
+        index += 1
+        continue
+      }
+      if (line.startsWith('class ')) {
+        const trimmed = line.slice('class '.length).trim()
+        if (trimmed.endsWith('{')) {
+          const id = parseClassIdentifier(trimmed.replace(/\{$/, '').trim(), lineNumber)
+          const members = []
+          index += 1
+          let closed = false
+          while (index < rows.length) {
+            const nested = rows[index].line
+            if (nested === '}') { closed = true; index += 1; break }
+            if (nested.endsWith('}')) {
+              const content = nested.slice(0, -1).trim()
+              if (content) members.push(content)
+              closed = true
+              index += 1
+              break
+            }
+            members.push(nested)
+            index += 1
+          }
+          if (!closed) throw new Error(`line ${lineNumber}: class \`${id}\` block is not closed`)
+          registerClass(id, members)
+          continue
+        }
+        if (trimmed.includes('{')) {
+          const [namePart, tail] = trimmed.split(/\{(.+)/)
+          const id = parseClassIdentifier(namePart.trim(), lineNumber)
+          const member = (tail || '').replace(/\}$/, '').trim()
+          registerClass(id, member ? [member] : [])
+          index += 1
+          continue
+        }
+        registerClass(parseClassIdentifier(trimmed, lineNumber), [])
+        index += 1
+        continue
+      }
+      const relation = parseClassRelation(line, lineNumber)
+      if (relation) {
+        registerClass(relation.from, [])
+        registerClass(relation.to, [])
+        relations.push(relation)
+      }
+      index += 1
+    }
+    if (!classes.length) throw new Error('class diagram must declare or reference at least one class')
+    return { title, direction, classes, relations }
+  }
+
+  function classDirectionHorizontal(direction) {
+    return direction === 'LR' || direction === 'RL'
+  }
+
+  function classRelationPoints(source, target, direction) {
+    if (classDirectionHorizontal(direction)) {
+      const sc = source.x + source.w / 2
+      const tc = target.x + target.w / 2
+      return sc <= tc
+        ? { x1: source.x + source.w, y1: source.y + source.h / 2, x2: target.x, y2: target.y + target.h / 2 }
+        : { x1: source.x, y1: source.y + source.h / 2, x2: target.x + target.w, y2: target.y + target.h / 2 }
+    }
+    const sc = source.y + source.h / 2
+    const tc = target.y + target.h / 2
+    return sc <= tc
+      ? { x1: source.x + source.w / 2, y1: source.y + source.h, x2: target.x + target.w / 2, y2: target.y }
+      : { x1: source.x + source.w / 2, y1: source.y, x2: target.x + target.w / 2, y2: target.y + target.h }
+  }
+
+  function classRelationRoute(source, target, layouts, direction, dashed, options) {
+    const points = classRelationPoints(source, target, direction)
+    const sourceCx = source.x + source.w / 2
+    const sourceCy = source.y + source.h / 2
+    const targetCx = target.x + target.w / 2
+    const targetCy = target.y + target.h / 2
+    const intermediateCount = classDirectionHorizontal(direction)
+      ? layouts.filter((layout) => {
+          const centerX = layout.x + layout.w / 2
+          return centerX > Math.min(sourceCx, targetCx) + 0.1 && centerX < Math.max(sourceCx, targetCx) - 0.1
+        }).length
+      : layouts.filter((layout) => {
+          const centerY = layout.y + layout.h / 2
+          return centerY > Math.min(sourceCy, targetCy) + 0.1 && centerY < Math.max(sourceCy, targetCy) - 0.1
+        }).length
+    if (!intermediateCount) return { points: [{ x: points.x1, y: points.y1 }, { x: points.x2, y: points.y2 }], labelFrom: { x: points.x1, y: points.y1 }, labelTo: { x: points.x2, y: points.y2 }, labelCenter: null, start: { x: points.x1, y: points.y1 }, end: { x: points.x2, y: points.y2 } }
+    if (classDirectionHorizontal(direction)) {
+      const laneStep = Math.max(options.laneStep, options.labelGap * 2 + 8)
+      const laneY = Math.min(source.y, target.y) - options.laneClearance - Math.max(0, intermediateCount - 1) * laneStep
+      const portOffset = 22
+      const startX = source.x + source.w / 2 + (dashed ? portOffset : -portOffset)
+      const endX = target.x + target.w / 2 + (dashed ? -portOffset : portOffset)
+      return { points: [{ x: startX, y: source.y }, { x: startX, y: laneY }, { x: endX, y: laneY }, { x: endX, y: target.y }], labelFrom: { x: startX, y: laneY }, labelTo: { x: endX, y: laneY }, labelCenter: { x: (startX + endX) / 2, y: laneY - options.labelGap }, start: { x: startX, y: source.y }, end: { x: endX, y: target.y } }
+    }
+    const laneStep = Math.max(options.laneStep, options.labelGap * 2 + 8)
+    const laneX = Math.min(source.x, target.x) - options.laneClearance - Math.max(0, intermediateCount - 1) * laneStep
+    const portOffset = 16
+    const startY = source.y + source.h / 2 + (dashed ? portOffset : -portOffset)
+    const endY = target.y + target.h / 2 + (dashed ? -portOffset : portOffset)
+    return { points: [{ x: source.x, y: startY }, { x: laneX, y: startY }, { x: laneX, y: endY }, { x: target.x, y: endY }], labelFrom: { x: laneX, y: startY }, labelTo: { x: laneX, y: endY }, labelCenter: { x: laneX + options.labelGap, y: (startY + endY) / 2 }, start: { x: source.x, y: startY }, end: { x: target.x, y: endY } }
+  }
+
+  function classRelationCardinality(value, endpoints, sourceSide, direction) {
+    const t = theme()
+    const width = analyticsEstimateTextWidth(value, 11, 650)
+    if (classDirectionHorizontal(direction)) {
+      const leftToRight = endpoints.x1 <= endpoints.x2
+      const x = sourceSide ? (leftToRight ? endpoints.x1 - width - 8 : endpoints.x1 + 8) : (leftToRight ? endpoints.x2 + 8 : endpoints.x2 - width - 8)
+      return c4Text(x, endpoints.y1 - 10, value, 11, 650, t.text)
+    }
+    const topToBottom = endpoints.y1 <= endpoints.y2
+    const y = sourceSide ? (topToBottom ? endpoints.y1 - 8 : endpoints.y1 + 14) : (topToBottom ? endpoints.y2 + 14 : endpoints.y2 - 8)
+    return c4Text(endpoints.x1 + 10, y, value, 11, 650, t.text)
+  }
+
+  function classRelationLabel(value, x, y) {
+    const t = theme()
+    return text(x, y, value, 11, 650, t.text)
+  }
+
+  function renderClassDiagram(source, renderOptions) {
+    const t = theme()
+    const diagram = parseClassDiagram(source)
+    const options = renderOptions || { margin: 32, origin: 64, laneClearance: 10, laneStep: 18, labelGap: 10 }
+    const layouts = diagram.classes.map((node) => {
+      const titleLines = c4WrapText(node.id, 220, 15, 600)
+      const headerH = 20 + titleLines.length * 18
+      const titleW = Math.max(0, ...titleLines.map((lineText) => analyticsEstimateTextWidth(lineText, 15, 700)))
+      const memberW = Math.max(0, ...node.members.map((member) => analyticsEstimateTextWidth(member, 12, 600)))
+      const w = Math.max(Math.max(titleW, memberW) + 32, 160)
+      const memberH = node.members.length ? 16 + node.members.length * 16 : 0
+      return { x: 0, y: 0, w, h: Math.max(headerH + memberH + 18, 64), headerH }
+    })
+    const order = (diagram.direction === 'RL' || diagram.direction === 'BT') ? layouts.map((_, index) => index).reverse() : layouts.map((_, index) => index)
+    let width
+    let height
+    if (classDirectionHorizontal(diagram.direction)) {
+      let cursor = options.margin
+      let maxH = 0
+      order.forEach((classIndex) => {
+        layouts[classIndex].x = cursor
+        layouts[classIndex].y = options.origin
+        cursor += layouts[classIndex].w + 64
+        maxH = Math.max(maxH, layouts[classIndex].h)
+      })
+      width = cursor - 64 + options.margin
+      height = options.origin + maxH + options.margin
+    } else {
+      let cursor = options.origin
+      let maxW = 0
+      order.forEach((classIndex) => {
+        layouts[classIndex].x = options.margin
+        layouts[classIndex].y = cursor
+        cursor += layouts[classIndex].h + 64
+        maxW = Math.max(maxW, layouts[classIndex].w)
+      })
+      width = options.margin + maxW + options.margin
+      height = cursor - 64 + options.margin
+    }
+    const lookup = new Map(diagram.classes.map((node, index) => [node.id, layouts[index]]))
+    const routes = diagram.relations.map((relation) => {
+      const sourceLayout = lookup.get(relation.from)
+      const targetLayout = lookup.get(relation.to)
+      return sourceLayout && targetLayout ? classRelationRoute(sourceLayout, targetLayout, layouts, diagram.direction, relation.dashed, options) : null
+    })
+    const body = []
+    diagram.relations.forEach((relation, index) => {
+      const route = routes[index]
+      if (!route) return
+      const edge = route.points.length === 2
+        ? arrowLineSvg(route.start.x, route.start.y, route.end.x, route.end.y, t.text, relation.dashed)
+        : polylineArrowSvg(route.points, t.text, relation.dashed)
+      const endpoints = { x1: route.start.x, y1: route.start.y, x2: route.end.x, y2: route.end.y }
+      const labelMarkup = relation.label
+        ? (() => {
+            if (route.labelCenter) return classRelationLabel(relation.label, route.labelCenter.x, route.labelCenter.y)
+            const labelW = analyticsEstimateTextWidth(relation.label, 11, 650) + 18
+            const x = classDirectionHorizontal(diagram.direction) ? (route.labelFrom.x + route.labelTo.x) / 2 : route.labelFrom.x + 12 + labelW / 2
+            const y = classDirectionHorizontal(diagram.direction) ? Math.min(route.labelFrom.y, route.labelTo.y) - 18.5 : (route.labelFrom.y + route.labelTo.y) / 2 + 3.5
+            return classRelationLabel(relation.label, x, y)
+          })()
+        : ''
+      body.push(`<g data-class-rel="${dataAttr(`${relation.from}->${relation.to}`)}">${edge}${relation.fromCardinality ? classRelationCardinality(relation.fromCardinality, endpoints, true, diagram.direction) : ''}${relation.toCardinality ? classRelationCardinality(relation.toCardinality, endpoints, false, diagram.direction) : ''}${labelMarkup}</g>`)
+    })
+    diagram.classes.forEach((node, index) => {
+      const layout = layouts[index]
+      body.push(rect(layout.x, layout.y, layout.w, layout.h, 0, t.surface, t.borderStrong))
+      body.push(line(layout.x, layout.y + layout.headerH, layout.x + layout.w, layout.y + layout.headerH, t.border))
+      c4WrapText(node.id, layout.w - 24, 15, 600).forEach((lineText, lineIndex) => {
+        body.push(text(layout.x + layout.w / 2, layout.y + 26 + lineIndex * 18, lineText, 15, 700, t.text))
+      })
+      node.members.forEach((member, memberIndex) => {
+        body.push(c4Text(layout.x + 14, layout.y + layout.headerH + 18 + memberIndex * 16, member, 12, 600, t.muted))
+      })
+    })
+    return diagram.title ? rustSvgWithTitle(width, height, diagram.title, body.join(''), 'Class diagram') : rustSvg(width, height, body.join(''), 'Class diagram')
+  }
+
+  function renderC4CodeDiagram(source) {
+    const classSource = `classDiagram\n${source.split(/\r?\n/).slice(1).join('\n')}\n`
+    return renderClassDiagram(classSource, { margin: 64, origin: 108, laneClearance: 28, laneStep: 30, labelGap: 18 })
+  }
+
+  function architectureBracketLabel(spec) {
+    const open = String(spec || '').indexOf('[')
+    const close = String(spec || '').lastIndexOf(']')
+    return open >= 0 && close > open ? stripOuterQuotes(spec.slice(open + 1, close).trim()) : null
+  }
+
+  function architectureDeclId(spec) {
+    const textValue = String(spec || '').trim()
+    const candidates = ['(', '[', ' '].map((ch) => textValue.indexOf(ch)).filter((index) => index >= 0)
+    return (candidates.length ? textValue.slice(0, Math.min(...candidates)) : textValue).trim()
+  }
+
+  function architectureDeclIcon(spec) {
+    const match = String(spec || '').match(/\(([^)]*)\)/)
+    return match && match[1].trim() ? match[1].trim() : null
+  }
+
+  function architectureSplitParent(raw) {
+    const parts = String(raw || '').split(/\s+in\s+/)
+    return { spec: parts[0].trim(), parent: parts[1] ? parts[1].trim() : null }
+  }
+
+  function parseArchitectureEndpoint(raw, left) {
+    const textValue = String(raw || '').trim()
+    const split = left ? textValue.lastIndexOf(':') : textValue.indexOf(':')
+    if (split < 0) return null
+    const idPart = left ? textValue.slice(0, split).trim() : textValue.slice(split + 1).trim()
+    const side = left ? textValue.slice(split + 1).trim() : textValue.slice(0, split).trim()
+    const useParentGroup = idPart.endsWith('{group}')
+    const id = (useParentGroup ? idPart.slice(0, -'{group}'.length) : idPart).trim()
+    const sideMap = { T: 'top', B: 'bottom', L: 'left', R: 'right' }
+    return id && sideMap[side] ? { id, side: sideMap[side], sideCode: side, useParentGroup } : null
+  }
+
+  function parseArchitectureEdge(row) {
+    const dash = row.indexOf('--')
+    if (dash < 0) return null
+    let left = row.slice(0, dash).trim()
+    let right = row.slice(dash + 2).trim()
+    const startArrow = left.endsWith('<')
+    if (startArrow) left = left.slice(0, -1).trim()
+    const endArrow = right.startsWith('>')
+    if (endArrow) right = right.slice(1).trim()
+    const from = parseArchitectureEndpoint(left, true)
+    const to = parseArchitectureEndpoint(right, false)
+    return from && to ? { from, to, startArrow, endArrow } : null
+  }
+
+  function architectureIcon(icon, x, y, size) {
+    const t = theme()
+    if (icon === 'database') {
+      const topD = `M ${f1(x)} ${f1(y + size * 0.25)} C ${f1(x)} ${f1(y - size * 0.05)}, ${f1(x + size)} ${f1(y - size * 0.05)}, ${f1(x + size)} ${f1(y + size * 0.25)} C ${f1(x + size)} ${f1(y + size * 0.55)}, ${f1(x)} ${f1(y + size * 0.55)}, ${f1(x)} ${f1(y + size * 0.25)}`
+      const bodyD = `M ${f1(x)} ${f1(y + size * 0.25)} L ${f1(x)} ${f1(y + size * 0.86)} M ${f1(x + size)} ${f1(y + size * 0.25)} L ${f1(x + size)} ${f1(y + size * 0.86)} M ${f1(x)} ${f1(y + size * 0.86)} C ${f1(x)} ${f1(y + size * 1.16)}, ${f1(x + size)} ${f1(y + size * 1.16)}, ${f1(x + size)} ${f1(y + size * 0.86)}`
+      return `${path(topD, t.accent, 1.7)}${path(bodyD, t.accent, 1.7)}`
+    }
+    if (icon === 'disk') return `${rect(x, y + size * 0.1, size, size * 0.8, 4, 'none', t.accent)}${line(x + size * 0.2, y + size * 0.32, x + size * 0.8, y + size * 0.32, t.accent)}${line(x + size * 0.2, y + size * 0.58, x + size * 0.65, y + size * 0.58, t.accent)}`
+    if (icon === 'cloud' || icon === 'internet') return `${path(`M ${f1(x + size * 0.18)} ${f1(y + size * 0.68)} C ${f1(x - size * 0.04)} ${f1(y + size * 0.65)}, ${f1(x)} ${f1(y + size * 0.28)}, ${f1(x + size * 0.28)} ${f1(y + size * 0.34)} C ${f1(x + size * 0.38)} ${f1(y)}, ${f1(x + size * 0.86)} ${f1(y + size * 0.12)}, ${f1(x + size * 0.82)} ${f1(y + size * 0.46)} C ${f1(x + size * 1.08)} ${f1(y + size * 0.48)}, ${f1(x + size * 1.05)} ${f1(y + size * 0.86)}, ${f1(x + size * 0.78)} ${f1(y + size * 0.84)} L ${f1(x + size * 0.18)} ${f1(y + size * 0.84)}`, t.accent, 1.7)}`
+    return `${rect(x, y + size * 0.12, size, size * 0.72, 5, 'none', t.accent)}${line(x + size * 0.2, y + size * 0.36, x + size * 0.8, y + size * 0.36, t.accent)}${line(x + size * 0.2, y + size * 0.6, x + size * 0.66, y + size * 0.6, t.accent)}`
+  }
+
+  function parseArchitecture(source) {
+    const nodes = new Map()
+    const order = []
+    const edges = []
+    const addNode = (node) => {
+      if (nodes.has(node.id)) return
+      nodes.set(node.id, { children: [], ...node })
+      order.push(node.id)
+    }
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('group ')) {
+        const { spec, parent } = architectureSplitParent(row.slice('group '.length))
+        const id = architectureDeclId(spec)
+        if (id) addNode({ id, type: 'group', label: architectureBracketLabel(spec) || id, icon: architectureDeclIcon(spec) || 'cloud', parent })
+      } else if (row.startsWith('service ')) {
+        const { spec, parent } = architectureSplitParent(row.slice('service '.length))
+        const id = architectureDeclId(spec)
+        if (id) addNode({ id, type: 'service', label: architectureBracketLabel(spec) || id, icon: architectureDeclIcon(spec) || 'server', parent })
+      } else if (row.startsWith('junction ')) {
+        const { spec, parent } = architectureSplitParent(row.slice('junction '.length))
+        const id = architectureDeclId(spec)
+        if (id) addNode({ id, type: 'junction', label: id, icon: null, parent })
+      } else if (row.includes('--')) {
+        const edge = parseArchitectureEdge(row)
+        if (edge) edges.push(edge)
+      }
+    })
+    if (!nodes.size) throw new Error('architecture-beta requires at least one group or service')
+    const roots = []
+    order.forEach((id) => {
+      const node = nodes.get(id)
+      if (node.parent && nodes.has(node.parent)) nodes.get(node.parent).children.push(id)
+      else roots.push(id)
+    })
+    return { nodes, roots, edges }
+  }
+
+  function architectureNodeSize(id, model) {
+    const node = model.nodes.get(id)
+    if (!node) return { w: 196, h: 56 }
+    if (node.type === 'service') return { w: 196, h: 56 }
+    if (node.type === 'junction') return { w: 22, h: 22 }
+    const childSizes = node.children.map((child) => architectureNodeSize(child, model))
+    const cols = Math.min(2, Math.max(1, childSizes.length))
+    const rows = Math.max(1, Math.ceil(childSizes.length / cols))
+    const colW = Math.max(196, ...childSizes.map((size) => size.w))
+    const rowH = Math.max(56, ...childSizes.map((size) => size.h))
+    return {
+      w: Math.max(312, 48 + cols * colW + Math.max(0, cols - 1) * 56),
+      h: Math.max(150, 58 + 24 + rows * rowH + Math.max(0, rows - 1) * 44 + 24),
+    }
+  }
+
+  function layoutArchitectureNode(id, model, layouts, x, y) {
+    const node = model.nodes.get(id)
+    const size = architectureNodeSize(id, model)
+    layouts.set(id, { x, y, w: size.w, h: size.h })
+    if (!node || node.type !== 'group') return
+    const children = node.children
+    const cols = Math.min(2, Math.max(1, children.length))
+    const childSizes = children.map((child) => architectureNodeSize(child, model))
+    const colW = Math.max(196, ...childSizes.map((child) => child.w))
+    const rowH = Math.max(56, ...childSizes.map((child) => child.h))
+    const gridW = cols * colW + Math.max(0, cols - 1) * 56
+    const startX = x + (size.w - gridW) / 2
+    const startY = y + 58 + 24
+    children.forEach((child, index) => {
+      const childSize = childSizes[index]
+      const col = index % cols
+      const row = Math.floor(index / cols)
+      layoutArchitectureNode(child, model, layouts, startX + col * (colW + 56) + (colW - childSize.w) / 2, startY + row * (rowH + 44))
+    })
+  }
+
+  function architectureAnchor(box, side) {
+    if (side === 'top') return { x: box.x + box.w / 2, y: box.y }
+    if (side === 'bottom') return { x: box.x + box.w / 2, y: box.y + box.h }
+    if (side === 'left') return { x: box.x, y: box.y + box.h / 2 }
+    return { x: box.x + box.w, y: box.y + box.h / 2 }
+  }
+
+  function architectureEndpointBox(endpoint, model, layouts) {
+    const node = model.nodes.get(endpoint.id)
+    const parent = endpoint.useParentGroup && node && node.parent ? node.parent : endpoint.id
+    return layouts.get(parent) || layouts.get(endpoint.id)
+  }
+
+  function architectureRoute(start, startSide, end, endSide) {
+    const vector = (side) => side === 'top' ? { x: 0, y: -1 } : side === 'bottom' ? { x: 0, y: 1 } : side === 'left' ? { x: -1, y: 0 } : { x: 1, y: 0 }
+    const sv = vector(startSide), ev = vector(endSide)
+    const startStub = { x: start.x + sv.x * 24, y: start.y + sv.y * 24 }
+    const endStub = { x: end.x + ev.x * 24, y: end.y + ev.y * 24 }
+    const points = [start, startStub]
+    const startHorizontal = sv.x !== 0
+    const endHorizontal = ev.x !== 0
+    if (startHorizontal === endHorizontal) {
+      if (startHorizontal) {
+        const midX = (startStub.x + endStub.x) / 2
+        points.push({ x: midX, y: startStub.y }, { x: midX, y: endStub.y })
+      } else {
+        const midY = (startStub.y + endStub.y) / 2
+        points.push({ x: startStub.x, y: midY }, { x: endStub.x, y: midY })
+      }
+    } else if (startHorizontal) points.push({ x: endStub.x, y: startStub.y })
+    else points.push({ x: startStub.x, y: endStub.y })
+    points.push(endStub, end)
+    return points.filter((point, index, items) => !index || Math.abs(point.x - items[index - 1].x) > 0.1 || Math.abs(point.y - items[index - 1].y) > 0.1)
+  }
+
+  function renderArchitectureNode(id, model, layouts) {
+    const t = theme()
+    const node = model.nodes.get(id)
+    const box = layouts.get(id)
+    if (!node || !box) return ''
+    if (node.type === 'group') {
+      const childMarkup = node.children.map((child) => renderArchitectureNode(child, model, layouts)).join('')
+      return `<g data-architecture-node="group" data-architecture-id="${attr(id)}">${rect(box.x, box.y, box.w, box.h, 26, t.surfaceAlt, t.border)}${architectureIcon(node.icon || 'cloud', box.x + 20, box.y + 18, 18)}${text(box.x + 50, box.y + 34, node.label, 15, 720, t.text, 'start')}${line(box.x + 18, box.y + 58, box.x + box.w - 18, box.y + 58, t.grid)}${childMarkup}</g>`
+    }
+    if (node.type === 'junction') {
+      const cx = box.x + box.w / 2
+      const cy = box.y + box.h / 2
+      return `<g data-architecture-node="junction" data-architecture-id="${attr(id)}">${circle(cx, cy, box.w / 2, t.accent, t.border)}${circle(cx, cy, box.w / 2 + 5, `${t.accent}2e`, 'none')}</g>`
+    }
+    const labelLines = c4WrapText(node.label, box.w - 68, 12, 650).slice(0, 2)
+    const firstY = box.y + 27 - Math.max(0, labelLines.length - 1) * 7
+    return `<g data-architecture-node="service" data-architecture-id="${attr(id)}">${rect(box.x, box.y, box.w, box.h, 18, t.surface, t.border)}${architectureIcon(node.icon || 'server', box.x + 16, box.y + 14, 16)}${labelLines.map((lineText, index) => c4Text(box.x + 48, firstY + index * 14, lineText, 12, 650, t.text)).join('')}</g>`
+  }
+
+  function renderArchitecture(source) {
+    const t = theme()
+    const model = parseArchitecture(source)
+    const rootSizes = model.roots.map((id) => architectureNodeSize(id, model))
+    const rootW = rootSizes.reduce((sum, size) => sum + size.w, 0) + Math.max(0, rootSizes.length - 1) * 92
+    const rootH = Math.max(0, ...rootSizes.map((size) => size.h))
+    const width = Math.max(420, rootW + 112)
+    const height = Math.max(220, rootH + 80)
+    const layouts = new Map()
+    let x = 56
+    model.roots.forEach((id, index) => {
+      layoutArchitectureNode(id, model, layouts, x, 40)
+      x += rootSizes[index].w + 92
+    })
+    const nodeLayer = model.roots.map((id) => renderArchitectureNode(id, model, layouts)).join('')
+    const edgeLayer = model.edges.map((edge) => {
+      const aBox = architectureEndpointBox(edge.from, model, layouts)
+      const bBox = architectureEndpointBox(edge.to, model, layouts)
+      if (!aBox || !bBox) return ''
+      const start = architectureAnchor(aBox, edge.from.side)
+      const end = architectureAnchor(bBox, edge.to.side)
+      const route = architectureRoute(start, edge.from.side, end, edge.to.side)
+      return `<g data-architecture-edge="${attr(`${edge.from.id}:${edge.from.sideCode}->${edge.to.id}:${edge.to.sideCode}`)}">${rustPolylineArrowheads(route, t.link, false, edge.startArrow, edge.endArrow, 2)}</g>`
+    }).join('')
+    return rustSvgWithTitle(width, height, 'Architecture', `${nodeLayer}${edgeLayer}`, 'Architecture')
+  }
+
+  function parseStateDiagram(source) {
+    const states = new Map()
+    const order = []
+    const transitions = []
+    let startCount = 0
+    let endCount = 0
+    const ensureState = (id, label = id, kind = 'regular') => {
+      if (!states.has(id)) {
+        order.push(id)
+        states.set(id, { id, label, kind })
+      }
+    }
+    const resolvePseudo = (token, isSource) => {
+      if (token !== '[*]') {
+        ensureState(token)
+        return token
+      }
+      if (isSource) {
+        startCount += 1
+        const id = `_start_${startCount}`
+        ensureState(id, '', 'start')
+        return id
+      }
+      endCount += 1
+      const id = `_end_${endCount}`
+      ensureState(id, '', 'end')
+      return id
+    }
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('direction ') || row === '}' || /^(style|class|click|classDef)\s+/.test(row)) return
+      if (row.startsWith('state ')) {
+        const rest = row.slice('state '.length).trim()
+        if (rest.startsWith('"')) {
+          const close = rest.slice(1).indexOf('"')
+          if (close >= 0) {
+            const label = rest.slice(1, 1 + close)
+            const after = rest.slice(2 + close).trim()
+            if (after.startsWith('as ')) ensureState(after.slice('as '.length).replace(/\{$/, '').trim(), label)
+          }
+        } else ensureState(rest.replace(/\{$/, '').trim())
+        return
+      }
+      const arrow = row.indexOf('-->')
+      if (arrow < 0) return
+      const lhs = row.slice(0, arrow).trim()
+      const rhsFull = row.slice(arrow + 3).trim()
+      const colon = rhsFull.indexOf(':')
+      const rhs = (colon >= 0 ? rhsFull.slice(0, colon) : rhsFull).trim()
+      const label = colon >= 0 ? rhsFull.slice(colon + 1).trim() : ''
+      if (!lhs || !rhs) return
+      transitions.push({ from: resolvePseudo(lhs, true), to: resolvePseudo(rhs, false), label: label || null })
+    })
+    if (!states.size) throw new Error('state diagram requires at least one state or transition')
+    return { states, order, transitions }
+  }
+
+  function renderStateShape(box, state) {
+    const t = theme()
+    const cx = box.x + box.w / 2
+    const cy = box.y + box.h / 2
+    if (state.kind === 'start') return `<g data-state-node="${attr(state.id)}"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="14.0" fill="${t.text}" stroke="none"/></g>`
+    if (state.kind === 'end') return `<g data-state-node="${attr(state.id)}"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="14.0" fill="none" stroke="${t.text}" stroke-width="2"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="7.0" fill="${t.text}" stroke="none"/></g>`
+    return `<g data-state-node="${attr(state.id)}">${rect(box.x, box.y, box.w, box.h, 12, t.surface, t.border)}<rect x="${f1(box.x)}" y="${f1(box.y)}" width="${f1(box.w)}" height="${f1(box.h)}" rx="12" fill="${t.accent}" fill-opacity="0.08" stroke="none"/>${text(cx, cy + 13 * 0.35, state.label, 13, 500, t.text)}</g>`
+  }
+
+  function renderStateEdgeLabel(points, label) {
+    if (!label || points.length < 2) return ''
+    const t = theme()
+    let best = null
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const a = points[index], b = points[index + 1]
+      const horizontal = Math.abs(a.y - b.y) < 0.1
+      const length = horizontal ? Math.abs(a.x - b.x) : Math.abs(a.y - b.y)
+      if (!best || length > best.length) best = { midpoint: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, horizontal, length }
+    }
+    if (!best) return ''
+    const labelW = analyticsEstimateTextWidth(label, 11, 500) + 14
+    const labelH = 20
+    if (best.horizontal) {
+      const lx = best.midpoint.x - labelW / 2
+      const ly = best.midpoint.y - labelH - 4
+      return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${text(best.midpoint.x, ly + 14, label, 11, 500, t.muted)}`
+    }
+    const lx = best.midpoint.x + 6
+    const ly = best.midpoint.y - labelH / 2
+    return `${rect(lx, ly, labelW, labelH, 10, t.surface, t.border)}${c4Text(lx + 7, ly + 14, label, 11, 500, t.muted)}`
+  }
+
+  function renderStateDiagram(source) {
+    const t = theme()
+    const diagram = parseStateDiagram(source)
+    const sizes = new Map()
+    diagram.order.forEach((id) => {
+      const state = diagram.states.get(id)
+      if (state.kind === 'start' || state.kind === 'end') sizes.set(id, { w: 28, h: 28 })
+      else sizes.set(id, { w: Math.max(analyticsEstimateTextWidth(state.label, 13, 500) + 32, 160), h: 40 })
+    })
+    const rankConstraints = []
+    diagram.transitions.forEach((transition) => pushUniqueAcyclicConstraint(rankConstraints, transition.from, transition.to))
+    const rankMap = solveRankConstraints(diagram.order, rankConstraints)
+    const ranks = new Map()
+    diagram.order.forEach((id) => {
+      const rank = rankMap.get(id) || 0
+      if (!ranks.has(rank)) ranks.set(rank, [])
+      ranks.get(rank).push(id)
+    })
+    const rowKeys = [...ranks.keys()].sort((a, b) => a - b)
+    const contentW = Math.max(...[...ranks.values()].map((ids) => ids.reduce((sum, id) => sum + sizes.get(id).w, 0) + Math.max(0, ids.length - 1) * 56))
+    const positions = new Map()
+    let y = 0
+    rowKeys.forEach((rank, rowIndex) => {
+      const row = ranks.get(rank).sort()
+      const rowH = Math.max(...row.map((id) => sizes.get(id).h))
+      const rowW = row.reduce((sum, id) => sum + sizes.get(id).w, 0) + Math.max(0, row.length - 1) * 56
+      let x = Math.max(0, (contentW - rowW) / 2)
+      row.forEach((id, index) => {
+        const size = sizes.get(id)
+        positions.set(id, { x: 48 + x, y: 36 + y + Math.max(0, (rowH - size.h) / 2), w: size.w, h: size.h })
+        x += size.w + (index + 1 < row.length ? 56 : 0)
+      })
+      y += rowH + (rowIndex + 1 < rowKeys.length ? 72 : 0)
+    })
+    const width = Math.max(300, contentW + 96)
+    const height = Math.max(200, y + 72)
+    const edgeLayer = diagram.transitions.map((transition) => {
+      const a = positions.get(transition.from)
+      const b = positions.get(transition.to)
+      if (!a || !b) return ''
+      const start = { x: a.x + a.w / 2, y: a.y + a.h }
+      const end = { x: b.x + b.w / 2, y: b.y }
+      const route = [start, end]
+      return `${rustPolylineArrowheads(route, t.link, false, false, true, 2)}${renderStateEdgeLabel(route, transition.label)}`
+    }).join('')
+    const nodeLayer = diagram.order.map((id) => renderStateShape(positions.get(id), diagram.states.get(id))).join('')
+    return rustSvg(width, height, `${edgeLayer}${nodeLayer}`, 'State diagram')
+  }
+
+  function analyticsEstimateTextWidth(value, fontSize, weight) {
+    let units = 0
+    for (const ch of String(value || '')) {
+      if ('il!:;.,'.includes(ch)) units += 0.34
+      else if ('mwMW@#'.includes(ch)) units += 0.88
+      else if (ch === ' ') units += 0.28
+      else if (/^[A-Z]$/.test(ch)) units += 0.66
+      else if (/^[\x00-\x7F]$/.test(ch)) units += 0.58
+      else units += 1
+    }
+    return units * fontSize * (weight >= 700 ? 1.04 : 1)
+  }
+
+  function analyticsPalette(index) {
+    return rustPalette(index)
+  }
+
+  function stripOuterQuotes(value) {
+    const textValue = String(value || '').trim()
+    if (textValue.length >= 2 && ((textValue.startsWith('"') && textValue.endsWith('"')) || (textValue.startsWith("'") && textValue.endsWith("'")))) {
+      return textValue.slice(1, -1)
+    }
+    return textValue
+  }
+
+  function splitQuotedCsv(raw) {
+    const items = []
+    let current = ''
+    let inQuotes = false
+    for (const ch of String(raw || '')) {
+      if (ch === '"') {
+        inQuotes = !inQuotes
+        current += ch
+      } else if (ch === ',' && !inQuotes) {
+        const item = current.trim()
+        if (item) items.push(item)
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+    const item = current.trim()
+    if (item) items.push(item)
+    return items
+  }
+
+  function formatChartValue(value) {
+    return Math.abs(value - Math.round(value)) < 0.05 ? String(Math.round(value)) : value.toFixed(1)
+  }
+
+  function smoothSvgPath(points) {
+    if (!points.length) return ''
+    if (points.length === 1) return `M ${f1(points[0].x)} ${f1(points[0].y)}`
+    let d = `M ${f1(points[0].x)} ${f1(points[0].y)}`
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const p0 = index === 0 ? points[0] : points[index - 1]
+      const p1 = points[index]
+      const p2 = points[index + 1]
+      const p3 = index + 2 < points.length ? points[index + 2] : points[index + 1]
+      const cp1x = p1.x + (p2.x - p0.x) / 6
+      const cp1y = p1.y + (p2.y - p0.y) / 6
+      const cp2x = p2.x - (p3.x - p1.x) / 6
+      const cp2y = p2.y - (p3.y - p1.y) / 6
+      d += ` C ${f1(cp1x)} ${f1(cp1y)}, ${f1(cp2x)} ${f1(cp2y)}, ${f1(p2.x)} ${f1(p2.y)}`
+    }
+    return d
+  }
+
+  function pointOnPolygon(cx, cy, radius, count, index) {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / count
+    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+  }
+
+  function polygonPoints(cx, cy, radius, count) {
+    return Array.from({ length: count }, (_, index) => pointOnPolygon(cx, cy, radius, count, index))
+  }
+
+  function polygonSvg(points, fill, stroke, width, opacity) {
+    const pointText = points.map((p) => `${f1(p.x)},${f1(p.y)}`).join(' ')
+    return `<polygon points="${pointText}" fill="${fill}" fill-opacity="${Number(opacity).toFixed(2)}" stroke="${stroke}" stroke-width="${f1(width)}" stroke-linejoin="round"/>`
+  }
+
+  function parseXyChartLabel(raw) {
+    return stripOuterQuotes(raw)
+  }
+
+  function parseXyChartSeries(raw) {
+    const bracketStart = raw.indexOf('[')
+    const bracketEnd = raw.lastIndexOf(']')
+    if (bracketStart < 0) throw new Error('series requires `[...]` values')
+    if (bracketEnd < 0) throw new Error('series requires closing `]`')
+    if (bracketEnd <= bracketStart) throw new Error('series value list is malformed')
+    const label = raw.slice(0, bracketStart).trim()
+    const values = splitQuotedCsv(raw.slice(bracketStart + 1, bracketEnd)).map((part) => {
+      const value = Number(part)
+      if (!Number.isFinite(value)) throw new Error(`series value \`${part}\` must be numeric`)
+      return value
+    })
+    return { label: label ? parseXyChartLabel(label) : null, values }
+  }
+
+  function parseXyChartXAxis(raw) {
+    const bracketStart = raw.indexOf('[')
+    const bracketEnd = raw.lastIndexOf(']')
+    if (bracketStart < 0) throw new Error('x-axis requires `[...]` labels')
+    if (bracketEnd < 0) throw new Error('x-axis requires closing `]`')
+    if (bracketEnd <= bracketStart) throw new Error('x-axis label list is malformed')
+    const title = raw.slice(0, bracketStart).trim()
+    return {
+      title: title ? parseXyChartLabel(title) : null,
+      labels: splitQuotedCsv(raw.slice(bracketStart + 1, bracketEnd)).map(parseXyChartLabel),
+    }
+  }
+
+  function parseXyChartYAxis(raw) {
+    const parts = raw.split('-->')
+    if (parts.length < 2) throw new Error('y-axis requires `min --> max`')
+    const max = Number(parts.slice(1).join('-->').trim())
+    if (!Number.isFinite(max)) throw new Error('y-axis max must be numeric')
+    const leftParts = parts[0].trim().split(/\s+/).filter(Boolean)
+    const minRaw = leftParts.pop()
+    const min = Number(minRaw)
+    if (!Number.isFinite(min)) throw new Error('y-axis min must be numeric')
+    const title = leftParts.join(' ')
+    return { title: title ? parseXyChartLabel(title) : null, min, max }
+  }
+
+  function parseXyChart(source) {
+    const rows = source.split(/\r?\n/).map((line, index) => ({ line: line.trim(), lineNumber: index + 1 })).filter((row) => row.line && !row.line.startsWith('%%'))
+    if (!rows.length) throw new Error('xychart source is empty')
+    const directive = rows[0].line.split(/\s+/, 1)[0]
+    if (directive !== 'xychart' && directive !== 'xychart-beta') throw new Error(`line ${rows[0].lineNumber}: expected \`xychart\` as the first directive`)
+    const chart = { title: null, xAxisTitle: null, xLabels: [], yAxisTitle: null, yMin: 0, yMax: 100, yAxisSeen: false, barSeries: [], lineSeries: [] }
+    rows.slice(1).forEach(({ line, lineNumber }) => {
+      try {
+        if (line.startsWith('title ')) chart.title = parseXyChartLabel(line.slice('title '.length).trim())
+        else if (line.startsWith('x-axis ')) {
+          const axis = parseXyChartXAxis(line.slice('x-axis '.length).trim())
+          chart.xAxisTitle = axis.title
+          chart.xLabels = axis.labels
+        } else if (line.startsWith('y-axis ')) {
+          const axis = parseXyChartYAxis(line.slice('y-axis '.length).trim())
+          chart.yAxisTitle = axis.title
+          chart.yMin = axis.min
+          chart.yMax = axis.max
+          chart.yAxisSeen = true
+        } else if (line.startsWith('bar ')) chart.barSeries.push(parseXyChartSeries(line.slice('bar '.length).trim()))
+        else if (line.startsWith('line ')) chart.lineSeries.push(parseXyChartSeries(line.slice('line '.length).trim()))
+      } catch (error) {
+        throw new Error(`line ${lineNumber}: ${error.message}`)
+      }
+    })
+    if (!chart.barSeries.length && !chart.lineSeries.length) throw new Error('xychart requires at least one `bar` or `line` series')
+    const allValues = chart.barSeries.concat(chart.lineSeries).flatMap((series) => series.values)
+    if (!chart.yAxisSeen) {
+      chart.yMin = Math.min(...allValues, 0)
+      chart.yMax = Math.max(...allValues, 0)
+      if (Math.abs(chart.yMax - chart.yMin) < Number.EPSILON) chart.yMax = chart.yMin + 1
+    } else if (Math.abs(chart.yMax - chart.yMin) < Number.EPSILON) {
+      chart.yMax = chart.yMin + 1
+    }
+    const pointCount = Math.max(0, ...chart.barSeries.concat(chart.lineSeries).map((series) => series.values.length))
+    chart.barSeries.concat(chart.lineSeries).forEach((series) => {
+      if (series.values.length !== pointCount) throw new Error('xychart series lengths must match')
+    })
+    return chart
+  }
+
+  function renderXyChart(source) {
+    const t = theme()
+    const chart = parseXyChart(source)
+    const pointCount = Math.max(chart.xLabels.length, ...chart.barSeries.concat(chart.lineSeries).map((series) => series.values.length))
+    if (!pointCount) throw new Error('xychart requires at least one data point')
+    const xLabels = chart.xLabels.length ? chart.xLabels : Array.from({ length: pointCount }, (_, index) => String(index + 1))
+    if (xLabels.length !== pointCount) throw new Error(`xychart x-axis label count ${xLabels.length} does not match data length ${pointCount}`)
+    const width = 860
+    const height = 376
+    const plotX = 128
+    const plotY = 88
+    const plotW = 620
+    const plotH = 214
+    const ySpan = Math.max(chart.yMax - chart.yMin, 1)
+    const groupStep = plotW / pointCount
+    const scaleY = (value) => plotY + plotH - Math.max(0, Math.min(1, (value - chart.yMin) / ySpan)) * plotH
+    const plot = []
+    for (let row = 0; row <= 10; row += 1) {
+      const y = plotY + plotH * row / 10
+      for (let col = 0; col <= 31; col += 1) {
+        const x = plotX + plotW * col / 31
+        plot.push(`<circle cx="${f1(x)}" cy="${f1(y)}" r="1.7" fill="${t.grid}" fill-opacity="0.56"/>`)
+      }
+    }
+    const barSlotCount = Math.max(chart.barSeries.length, 1)
+    const barGroupWidth = Math.min(groupStep * 0.7, 86)
+    const barWidth = Math.max(barGroupWidth / barSlotCount * 0.74, 12)
+    chart.barSeries.forEach((series, seriesIndex) => {
+      const color = analyticsPalette(seriesIndex)
+      series.values.forEach((value, index) => {
+        const centerX = plotX + groupStep * (index + 0.5)
+        const slotWidth = barGroupWidth / barSlotCount
+        const x = centerX - barGroupWidth / 2 + slotWidth * seriesIndex + (slotWidth - barWidth) / 2
+        const y = scaleY(value)
+        const barH = Math.max(plotY + plotH - y, 0)
+        plot.push(`<rect x="${f1(x)}" y="${f1(y)}" width="${f1(barWidth)}" height="${f1(barH)}" rx="10.0" fill="${color}" fill-opacity="0.18" stroke="${color}" stroke-width="2"/>`)
+      })
+    })
+    chart.lineSeries.forEach((series, seriesIndex) => {
+      const stroke = analyticsPalette(seriesIndex + chart.barSeries.length)
+      const points = series.values.map((value, index) => ({ x: plotX + groupStep * (index + 0.5), y: scaleY(value) }))
+      if (points.length >= 2) {
+        const d = smoothSvgPath(points)
+        plot.push(`<path d="${attr(d)}" fill="none" stroke="${stroke}" stroke-opacity="0.16" stroke-width="6.0" stroke-linecap="round" stroke-linejoin="round"/>`)
+        plot.push(`<path d="${attr(d)}" fill="none" stroke="${stroke}" stroke-width="3.0" stroke-linecap="round" stroke-linejoin="round"/>`)
+      }
+      points.forEach((p) => plot.push(`<circle cx="${f1(p.x)}" cy="${f1(p.y)}" r="5.2" fill="${stroke}" stroke="${t.surface}" stroke-width="2.8"/>`))
+    })
+    const body = [`<g data-diagram-center-target="true">${plot.join('')}</g>`]
+    for (let tick = 0; tick < 5; tick += 1) {
+      const ratio = tick / 4
+      body.push(text(plotX - 32, plotY + plotH - plotH * ratio, formatChartValue(chart.yMin + ySpan * ratio), 13, 550, t.muted, 'middle'))
+    }
+    xLabels.forEach((label, index) => body.push(text(plotX + groupStep * (index + 0.5), plotY + plotH + 28, label, 13, 550, t.muted)))
+    if (chart.xAxisTitle) body.push(c4Text(plotX + plotW / 2, plotY + plotH + 58, chart.xAxisTitle, 12, 600, t.muted, 'middle'))
+    if (chart.yAxisTitle) body.push(`<text x="38.0" y="${f1(plotY + plotH / 2)}" fill="${t.muted}" text-anchor="middle" transform="rotate(-90 38.0 ${f1(plotY + plotH / 2)})" font-family="${UI_FONT}" font-size="12.0" font-weight="650">${escapeHtml(chart.yAxisTitle)}</text>`)
+    const totalSeries = chart.barSeries.length + chart.lineSeries.length
+    if (totalSeries > 1) {
+      const legendEntries = chart.barSeries.map((series, index) => ({ paletteIndex: index, kind: 'bar', label: series.label || `Bar ${index + 1}` }))
+        .concat(chart.lineSeries.map((series, index) => ({ paletteIndex: index + chart.barSeries.length, kind: 'line', label: series.label || `Line ${index + 1}` })))
+      const legendWidth = legendEntries.reduce((sum, entry) => sum + (entry.kind === 'bar' ? 32 : 40) + analyticsEstimateTextWidth(entry.label, 12, 600), 0) + 22 * Math.max(0, legendEntries.length - 1)
+      let cursorX = plotX + (plotW - legendWidth) / 2
+      const legendY = 54
+      legendEntries.forEach((entry) => {
+        const color = analyticsPalette(entry.paletteIndex)
+        if (entry.kind === 'bar') {
+          body.push(`<rect x="${f1(cursorX)}" y="${f1(legendY - 11)}" width="20.0" height="14.0" rx="4.0" fill="${color}" fill-opacity="0.18" stroke="${color}" stroke-width="2"/>`)
+          body.push(c4Text(cursorX + 30, legendY - 1, entry.label, 12, 600, t.muted))
+          cursorX += 32 + analyticsEstimateTextWidth(entry.label, 12, 600) + 22
+        } else {
+          body.push(`<g><line x1="${f1(cursorX)}" y1="${f1(legendY - 1)}" x2="${f1(cursorX + 28)}" y2="${f1(legendY - 1)}" stroke="${color}" stroke-width="3.0" stroke-linecap="round"/><circle cx="${f1(cursorX + 14)}" cy="${f1(legendY - 1)}" r="4.6" fill="${color}" stroke="${t.surface}" stroke-width="2.4"/></g>`)
+          body.push(c4Text(cursorX + 38, legendY - 1, entry.label, 12, 600, t.muted))
+          cursorX += 40 + analyticsEstimateTextWidth(entry.label, 12, 600) + 22
+        }
+      })
+    }
+    return analyticsSvgWithTitle(width, height, chart.title || 'XY Chart', body.join(''))
+  }
+
+  function renderRadar(source) {
+    const t = theme()
+    let title = ''
+    let axes = []
+    const curves = []
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('title')) {
+        title = stripOuterQuotes(row.slice('title'.length).trim())
+      } else if (row.startsWith('axis ')) {
+        axes = row.slice('axis '.length).split(',').map((value) => value.trim())
+      } else if (row.startsWith('curve ')) {
+        const rest = row.slice('curve '.length)
+        const split = rest.indexOf('{')
+        if (split >= 0) {
+          curves.push({
+            name: rest.slice(0, split).trim(),
+            values: rest.slice(split + 1).replace(/\}$/, '').split(',').map((value) => Number(value.trim())).filter(Number.isFinite),
+          })
+        }
+      }
+    })
+    if (!axes.length || !curves.length) throw new Error('radar-beta requires axis and at least one curve')
+    if (!title) title = 'Radar'
+    const width = 840
+    const height = 520
+    const cx = 320
+    const cy = 270
+    const radius = 138
+    const radarBody = []
+    const body = []
+    for (let ring = 1; ring <= 5; ring += 1) {
+      const r = radius * ring / 5
+      radarBody.push(polygonSvg(polygonPoints(cx, cy, r, axes.length), 'none', t.grid, 1, 0))
+      radarBody.push(`<text x="${f1(cx - 6)}" y="${f1(cy - r)}" fill="${t.muted}" font-size="9" text-anchor="end" dominant-baseline="middle" opacity="0.7">${ring}</text>`)
+    }
+    const axisPoints = polygonPoints(cx, cy, radius, axes.length)
+    axes.forEach((axisLabel, index) => {
+      const p = axisPoints[index]
+      radarBody.push(line(cx, cy, p.x, p.y, t.grid))
+      const textWidth = analyticsEstimateTextWidth(axisLabel, 11, 650)
+      const labelRadius = radius + 26 + Math.min(textWidth * 0.12, 18)
+      const lp = pointOnPolygon(cx, cy, labelRadius, axes.length, index)
+      const dx = lp.x - cx
+      const dy = lp.y - cy
+      const x = dx > 0 ? lp.x + 10 : dx < 0 ? lp.x - 10 : lp.x
+      const y = dy > 0 ? lp.y + 10 : dy < 0 ? lp.y - 10 : lp.y
+      const anchor = dx > 0 ? 'start' : dx < 0 ? 'end' : 'middle'
+      const baseline = dy > 0 ? 'hanging' : dy < 0 ? 'auto' : 'middle'
+      body.push(`<text x="${f1(x)}" y="${f1(y)}" fill="${t.text}" text-anchor="${anchor}" dominant-baseline="${baseline}" font-family="${UI_FONT}" font-size="11.0" font-weight="650">${escapeHtml(axisLabel)}</text>`)
+    })
+    curves.forEach((curve, index) => {
+      const color = analyticsPalette(index)
+      const points = curve.values.map((value, axisIndex) => pointOnPolygon(cx, cy, radius * Math.max(0, Math.min(1, value / 5)), axes.length, axisIndex))
+      radarBody.push(polygonSvg(points, color, color, 2, 0.18))
+      points.forEach((p) => radarBody.push(`<circle cx="${f1(p.x)}" cy="${f1(p.y)}" r="4.0" fill="${color}" stroke="${t.surface}" stroke-width="1.5"/>`))
+      const legendY = 116 + index * 26
+      body.push(`<circle cx="636.0" cy="${f1(legendY - 1)}" r="5.0" fill="${color}"/>`)
+      body.push(c4Text(648, legendY, curve.name, 12, 700, color))
+    })
+    body.push(`<g data-diagram-center-target="true">${radarBody.join('')}</g>`)
+    return analyticsSvgWithTitle(width, height, title, body.join(''))
+  }
+
+  function pointInCircle(x, y, cx, cy, r) {
+    const dx = x - cx
+    const dy = y - cy
+    return dx * dx + dy * dy <= r * r
+  }
+
+  function vennExclusiveRegionCentroid(circles, targetIndex) {
+    const [cx, cy, r] = circles[targetIndex]
+    let sumX = 0
+    let sumY = 0
+    let count = 0
+    for (let y = cy - r; y <= cy + r; y += 4) {
+      for (let x = cx - r; x <= cx + r; x += 4) {
+        if (pointInCircle(x, y, cx, cy, r) && circles.every((circle, index) => index === targetIndex || !pointInCircle(x, y, circle[0], circle[1], circle[2]))) {
+          sumX += x
+          sumY += y
+          count += 1
+        }
+      }
+    }
+    return count > 0 ? { x: sumX / count, y: sumY / count } : { x: cx, y: cy - r * 0.42 }
+  }
+
+  function vennLabelBlock(cx, cy, label, value) {
+    const t = theme()
+    return `${text(cx, cy - 12, label, 16, 700, t.text)}${text(cx, cy + 12, value, 12, 650, t.muted)}`
+  }
+
+  function renderVenn(source) {
+    const t = theme()
+    const sets = []
+    const unions = []
+    linesOf(source).slice(1).forEach((row) => {
+      if (row.startsWith('set ')) {
+        const rest = row.slice('set '.length)
+        const colon = rest.lastIndexOf(':')
+        if (colon >= 0) {
+          const name = rest.slice(0, colon)
+          const bracket = name.match(/\[(.*)\]/)
+          const label = stripOuterQuotes((bracket ? bracket[1] : name).trim())
+          sets.push([label, Number(rest.slice(colon + 1).trim()) || 0])
+        }
+      } else if (row.startsWith('union ')) {
+        const rest = row.slice('union '.length)
+        const labelMatch = rest.match(/\[(.*?)\]/)
+        const label = stripOuterQuotes(labelMatch ? labelMatch[1].trim() : 'Overlap')
+        const colon = rest.lastIndexOf(':')
+        const value = colon >= 0 ? Number(rest.slice(colon + 1).trim()) || 0 : 0
+        unions.push([label, value])
+      }
+    })
+    if (sets.length < 2) throw new Error('venn-beta requires at least two sets')
+    const width = 760
+    const height = 420
+    const circles = [
+      [300, 220, 110, analyticsPalette(0)],
+      [420, 220, 110, analyticsPalette(1)],
+      [360, 140, 96, analyticsPalette(2)],
+    ]
+    const activeCircleCount = Math.min(sets.length, circles.length)
+    const body = []
+    sets.slice(0, 3).forEach(([label, value], index) => {
+      const [cx, cy, r, fill] = circles[index]
+      const centroid = vennExclusiveRegionCentroid(circles.slice(0, activeCircleCount), index)
+      body.push(circleWithAlpha(cx, cy, r, fill, t.border, 0.28))
+      body.push(vennLabelBlock(centroid.x, centroid.y, label, value.toFixed(0)))
+    })
+    unions.slice(0, 2).forEach(([label, value]) => body.push(vennLabelBlock(360, 220, label, value.toFixed(0))))
+    return analyticsSvgWithTitle(width, height, 'Venn', body.join(''))
   }
 
   function renderSequenceDiagram(source) {

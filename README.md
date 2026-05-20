@@ -19,6 +19,9 @@ The userscript is self-contained and supports the diagram types used most often 
 - `C4Context`
 - `C4Container`
 - `C4Component`
+- `C4Code`
+- `architecture-beta`
+- `classDiagram` / `classDiagram-v2`
 - `erDiagram`
 - `journey`
 - `flowchart` / `graph`
@@ -30,6 +33,15 @@ The userscript is self-contained and supports the diagram types used most often 
 - `mindmap`
 - `timeline`
 - `sequenceDiagram`
+- `stateDiagram` / `stateDiagram-v2`
+- `sankey` / `sankey-beta`
+- `block-beta`
+- `packet-beta`
+- `kanban`
+- `treemap-beta`
+- `xychart` / `xychart-beta`
+- `radar-beta`
+- `venn-beta`
 
 ## Gallery
 
