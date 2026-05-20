@@ -2520,8 +2520,7 @@
       const node = nodes.get(id)
       if (!node) return ''
       const labelLines = flowchartWrapLines(node.label)
-      const totalTextH = labelLines.length * F.nodeLineH
-      const firstY = p.y + p.h / 2 - totalTextH / 2 + F.nodeTextSize
+      const firstY = p.y + p.h / 2 - ((labelLines.length - 1) * F.nodeLineH) / 2
       const labelMarkup = labelLines.map((lineValue, index) => text(p.x + p.w / 2, firstY + index * F.nodeLineH, lineValue, F.nodeTextSize, F.nodeTextWeight, t.text)).join('')
       return `<g data-flowchart-node="${attr(id)}">${renderFlowchartNodeShape(id, node, p)}${labelMarkup}</g>`
     }
@@ -4510,7 +4509,8 @@
     }).join('')
     const legend = slices.map((slice, index) => {
       const y = 132 + index * 32
-      return `${rect(500, y - 10, 16, 16, 8, palette[index % palette.length], 'none')}${text(528, y + 2, slice.label, 13, 650, t.text, 'start')}${text(740, y + 2, slice.value.toFixed(0), 13, 700, t.muted, 'start')}`
+      const centerY = y - 2
+      return `${rect(500, y - 10, 16, 16, 8, palette[index % palette.length], 'none')}${text(528, centerY, slice.label, 13, 650, t.text, 'start')}${text(740, centerY, slice.value.toFixed(0), 13, 700, t.muted, 'start')}`
     }).join('')
     return rustSvgWithTitle(900, 430, title, `${arcs}${legend}`, 'Pie chart')
   }
@@ -4777,7 +4777,7 @@
     const laneMarkup = branches.map((branch) => {
       const y = branchY.get(branch)
       const color = branchColor.get(branch)
-      return `${text(34, y + 4, branch, 12, 700, color, 'start')}<line x1="142.0" y1="${y.toFixed(1)}" x2="${(width - 28).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.5" opacity="0.45"/>`
+      return `${text(34, y, branch, 12, 700, color, 'start')}<line x1="142.0" y1="${y.toFixed(1)}" x2="${(width - 28).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.5" opacity="0.45"/>`
     }).join('')
     let active = 'main'
     const eventMarkup = events.map((event, index) => {
@@ -4797,7 +4797,7 @@
       if (event.type === 'commit') {
         const y = branchY.get(active)
         const color = branchColor.get(active) || t.accent
-        return y != null ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="10.0" fill="${color}" stroke="${t.surface}" stroke-width="2"/>${text(x + 18, y + 4, event.label, 12, 650, t.text, 'start')}` : ''
+        return y != null ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="10.0" fill="${color}" stroke="${t.surface}" stroke-width="2"/>${text(x + 18, y, event.label, 12, 650, t.text, 'start')}` : ''
       }
       const y1 = branchY.get(event.from)
       const y2 = branchY.get(active)
@@ -5213,8 +5213,8 @@
           const lw = analyticsEstimateTextWidth(field.label, 12, 600)
           const fs = avail > 0 && lw > avail ? Math.max(12 * avail / lw, 8) : 12
           const showRange = fw >= 52 && field.rangeLabel
-          body.push(text(fx + fw / 2, showRange ? ry + rowH / 2 : ry + rowH / 2 + 4, field.label, fs, 600, textFill))
-          if (showRange) body.push(text(fx + fw / 2, ry + rowH / 2 + 12, field.rangeLabel, 8, 400, textFill))
+          body.push(text(fx + fw / 2, showRange ? ry + rowH / 2 - 5 : ry + rowH / 2, field.label, fs, 600, textFill))
+          if (showRange) body.push(text(fx + fw / 2, ry + rowH / 2 + 8, field.rangeLabel, 8, 400, textFill))
         }
       })
       body.push(line(gx, ry + rowH, gx + gw, ry + rowH, t.border))
@@ -5972,7 +5972,7 @@
     const cy = box.y + box.h / 2
     if (state.kind === 'start') return `<g data-state-node="${attr(state.id)}"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="14.0" fill="${t.text}" stroke="none"/></g>`
     if (state.kind === 'end') return `<g data-state-node="${attr(state.id)}"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="14.0" fill="none" stroke="${t.text}" stroke-width="2"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="7.0" fill="${t.text}" stroke="none"/></g>`
-    return `<g data-state-node="${attr(state.id)}">${rect(box.x, box.y, box.w, box.h, 12, t.surface, t.border)}<rect x="${f1(box.x)}" y="${f1(box.y)}" width="${f1(box.w)}" height="${f1(box.h)}" rx="12" fill="${t.accent}" fill-opacity="0.08" stroke="none"/>${text(cx, cy + 13 * 0.35, state.label, 13, 500, t.text)}</g>`
+    return `<g data-state-node="${attr(state.id)}">${rect(box.x, box.y, box.w, box.h, 12, t.surface, t.border)}<rect x="${f1(box.x)}" y="${f1(box.y)}" width="${f1(box.w)}" height="${f1(box.h)}" rx="12" fill="${t.accent}" fill-opacity="0.08" stroke="none"/>${text(cx, cy, state.label, 13, 500, t.text)}</g>`
   }
 
   function renderStateEdgeLabel(points, label) {

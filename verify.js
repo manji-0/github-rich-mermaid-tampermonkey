@@ -898,6 +898,9 @@ const flowchartRustSamples = [
     check({ svg }) {
       assertIncludes(svg, 'viewBox="0 0 720.0 200.0"', this.name)
       for (const edge of ['Draft->Analyze', 'Analyze->Publish']) assertIncludes(svg, `data-flowchart-edge="${edge}"`, this.name)
+      assertFlowchartNodeTextCentered(svg, 'Draft', 'Draft save', this.name)
+      assertFlowchartNodeTextCentered(svg, 'Analyze', 'Analyze graph', this.name)
+      assertFlowchartNodeTextCentered(svg, 'Publish', 'Publish revision', this.name)
     },
   },
   {
@@ -1366,6 +1369,8 @@ title Dependency kinds
       assertIncludes(svg, '>blocked_by</text>', this.name)
       assertIncludes(svg, '>6</text>', this.name)
       assertIncludes(svg, '>2</text>', this.name)
+      if (svgTextY(svg, 'constrained_by') !== 130) throw new Error('Pie legend label should align with swatch center')
+      if (svgTextY(svg, '6') !== 130) throw new Error('Pie legend value should align with swatch center')
       if (svg.includes('ignored')) throw new Error('Pie should skip non-positive slices')
       if (svg.includes('&quot;') || svg.includes('>\"')) throw new Error('Pie should strip quoted labels')
     },
@@ -1569,6 +1574,8 @@ merge feature`,
       assertIncludes(svg, 'stroke-width="2"', this.name)
       assertIncludes(svg, 'r="14.0" fill="#66d4a4" fill-opacity="0.20" stroke="none" stroke-width="1.5"', this.name)
       assertIncludes(svg, 'stroke-dasharray="7 5"', this.name)
+      if (svgTextY(svg, 'main') !== 94) throw new Error('GitGraph branch label should align with lane center')
+      if (svgTextY(svg, 'init') !== 94) throw new Error('GitGraph commit label should align with commit node center')
       if (!svg.includes('fill="#66d4a4"')) throw new Error('GitGraph branch/merge arrows should use Rust inline arrowhead fill')
       if (!svg.includes('#8ea0ff') || !svg.includes('#66d4a4')) throw new Error('GitGraph should use per-branch palette colors')
     },
@@ -1948,6 +1955,9 @@ function assertGalleryViewBoxes(renderer, galleryBlocks) {
       assertArchitectureJunctionAnchors(svg, `gallery #${expected.index} architecture-beta`)
     }
     if (type === 'stateDiagram-v2') {
+      assertStateNodeTextCentered(svg, 'Draft', 'Draft', `gallery #${expected.index} state node`)
+      assertStateNodeTextCentered(svg, 'Ready', 'Ready', `gallery #${expected.index} state node`)
+      assertStateNodeTextCentered(svg, 'Published', 'Published', `gallery #${expected.index} state node`)
       assertPillTextCentered(svg, 'analyze ok', `gallery #${expected.index} state label`)
       assertPillTextCentered(svg, 'publish', `gallery #${expected.index} state label`)
     }
@@ -2318,6 +2328,54 @@ function flowchartNodeBounds(svg, id) {
     }
   }
   throw new Error(`flowchart node ${id} has no measurable shape`)
+}
+
+function flowchartNodeTextY(svg, id, label) {
+  const group = flowchartNodeGroup(svg, id)
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = group.match(new RegExp(`<text\\b[^>]*>${escaped}</text>`))
+  if (!match) throw new Error(`flowchart node ${id} missing label ${label}`)
+  return Number(svgAttrValue(match[0], 'y'))
+}
+
+function assertFlowchartNodeTextCentered(svg, id, label, context) {
+  const bounds = flowchartNodeBounds(svg, id)
+  const textY = flowchartNodeTextY(svg, id, label)
+  const centerY = bounds.y + bounds.h / 2
+  if (Math.abs(textY - centerY) > 0.1) {
+    throw new Error(`${context}: flowchart node ${id} label not centered ${textY}/${centerY}`)
+  }
+}
+
+function stateNodeGroup(svg, id) {
+  const marker = `<g data-state-node="${id}">`
+  const start = svg.indexOf(marker)
+  if (start < 0) throw new Error(`missing state node ${id}`)
+  const group = svgGroupAt(svg, start)
+  if (!group) throw new Error(`unterminated state node ${id}`)
+  return group
+}
+
+function stateNodeBounds(svg, id) {
+  const group = stateNodeGroup(svg, id)
+  const rectStart = group.indexOf('<rect ')
+  if (rectStart < 0) throw new Error(`state node ${id} has no measurable rect`)
+  const rect = group.slice(rectStart, group.indexOf('>', rectStart) + 1)
+  return {
+    x: Number(svgAttrValue(rect, 'x')),
+    y: Number(svgAttrValue(rect, 'y')),
+    w: Number(svgAttrValue(rect, 'width')),
+    h: Number(svgAttrValue(rect, 'height')),
+  }
+}
+
+function assertStateNodeTextCentered(svg, id, label, context) {
+  const bounds = stateNodeBounds(svg, id)
+  const textY = svgTextY(stateNodeGroup(svg, id), label)
+  const centerY = bounds.y + bounds.h / 2
+  if (Math.abs(textY - centerY) > 0.1) {
+    throw new Error(`${context}: state node ${id} label not centered ${textY}/${centerY}`)
+  }
 }
 
 function erEntityGroup(svg, id) {
