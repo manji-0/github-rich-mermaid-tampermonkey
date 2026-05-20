@@ -1476,6 +1476,10 @@
       })
       occupiedSegments.filter((seg) => seg.orientation === 'vertical').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
+        if (seg.axis >= Math.min(start.x, end.x) - 0.1 && seg.axis <= Math.max(start.x, end.x) + 0.1) {
+          startTurnYs.push(seg.start - 18, seg.end + 18)
+          endTurnYs.push(seg.start - 18, seg.end + 18)
+        }
       })
       occupiedSegments.filter((seg) => seg.orientation === 'horizontal').forEach((seg) => {
         axisCandidates.push(seg.start - 18, seg.end + 18)
@@ -1512,6 +1516,10 @@
       })
       occupiedSegments.filter((seg) => seg.orientation === 'horizontal').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
+        if (seg.axis >= Math.min(start.y, end.y) - 0.1 && seg.axis <= Math.max(start.y, end.y) + 0.1) {
+          startTurnXs.push(seg.start - 18, seg.end + 18)
+          endTurnXs.push(seg.start - 18, seg.end + 18)
+        }
       })
       occupiedSegments.filter((seg) => seg.orientation === 'vertical').forEach((seg) => {
         axisCandidates.push(seg.start - 18, seg.end + 18)
@@ -3419,6 +3427,8 @@
         routingState: 'Unroutable',
         labelPlacement: null,
         crossingReservations: [],
+        sourcePortOffset: { x: 0, y: 0 },
+        targetPortOffset: { x: 0, y: 0 },
       }
     })
     const sourcePortOffsets = new Map()
@@ -3475,7 +3485,14 @@
     })
     const orderedIndices = model.relations
       .map((rel, index) => index)
-      .sort((left, right) => c4RelationPriorityScore(right, model.relations[right], model, scene) - c4RelationPriorityScore(left, model.relations[left], model, scene) || c4RelationCenterSpan(model.relations[right], scene) - c4RelationCenterSpan(model.relations[left], scene) || left - right)
+      .sort((left, right) => {
+        const leftRel = model.relations[left]
+        const rightRel = model.relations[right]
+        if (leftRel.from === rightRel.from && leftRel.direction === rightRel.direction && (leftRel.direction === 'right' || leftRel.direction === 'left')) {
+          return c4RelationCenterSpan(leftRel, scene) - c4RelationCenterSpan(rightRel, scene) || left - right
+        }
+        return c4RelationPriorityScore(right, rightRel, model, scene) - c4RelationPriorityScore(left, leftRel, model, scene) || c4RelationCenterSpan(rightRel, scene) - c4RelationCenterSpan(leftRel, scene) || left - right
+      })
     orderedIndices.forEach((relationIndex) => {
       const rel = model.relations[relationIndex]
       const from = scene.layouts.get(rel.from)
@@ -3484,6 +3501,8 @@
       const obstacles = c4RelationObstacles(rel, relationIndex, model, scene)
       const fromOffset = portOffsetValue(sourcePortOffsets, relationIndex)
       const toOffset = portOffsetValue(targetPortOffsets, relationIndex)
+      item.sourcePortOffset = fromOffset
+      item.targetPortOffset = toOffset
       const route = from && to ? routeC4Relation(rel, from, to, occupiedSegments, obstacles, item.allowedRegion, item.displayLabel, fromOffset, toOffset) : null
       if (!route || !item) return
       item.route = { points: route, preferredLabelSegment: null }
@@ -3710,12 +3729,14 @@
         const item = workItems[relationIndex]
         if (!item?.route) continue
         const before = c4WorkItemPenalty(item, validation)
+        const itemIssues = c4ValidateScene(validation).filter((issue) => issue.relationIndex === relationIndex)
+        const routeConflict = itemIssues.some((issue) => issue.kind === 'RouteCrossesForeignRoute' || issue.kind === 'RouteOverlapsForeignRoute')
         const otherSegments = workItems.filter((candidate) => candidate.relationIndex !== relationIndex && candidate.route).flatMap((candidate) => c4SegmentsFromRoute(candidate.route.points))
         const forbidden = workItems.filter((candidate) => candidate.relationIndex !== relationIndex && candidate.labelPlacement).map((candidate) => c4ReservedLaneRectFromLabelRect(candidate.labelPlacement.rect))
           .concat(c4LabelForbiddenRects(item, model, scene))
         const candidate = c4LabelCandidates(item.route.points, item.displayLabel, item.allowedRegion, otherSegments, forbidden)[0]
         const previous = item.labelPlacement
-        if (candidate) {
+        if (candidate && !routeConflict) {
           item.labelPlacement = candidate.placement
           validation = c4BuildValidationScene(model, scene, workItems)
           const after = c4WorkItemPenalty(item, validation)
@@ -3744,7 +3765,7 @@
             .filter((candidateItem) => candidateItem.relationIndex !== relationIndex && candidateItem.labelPlacement)
             .map((candidateItem) => c4ReservedLaneRectFromLabelRect(candidateItem.labelPlacement.rect)),
         )
-        const route = routeC4Relation(item.rel, from, to, otherSegments, routeObstacles, item.allowedRegion, item.displayLabel)
+        const route = routeC4Relation(item.rel, from, to, otherSegments, routeObstacles, item.allowedRegion, item.displayLabel, item.sourcePortOffset, item.targetPortOffset)
         item.route = route ? { points: route, preferredLabelSegment: null } : null
         item.pathLength = route ? c4PathLength(route) : 0
         item.routingState = route ? 'Routed' : 'Unroutable'
@@ -5794,6 +5815,25 @@
   function architectureRoute(start, startSide, end, endSide, occupiedSegments = [], obstacles = [], width = 0, height = 0, options = {}) {
     const startStubLength = options.startStub ?? 24
     const endStubLength = options.endStub ?? 24
+    const sideVector = (side) => side === 'top' ? { x: 0, y: -1 } : side === 'bottom' ? { x: 0, y: 1 } : side === 'left' ? { x: -1, y: 0 } : { x: 1, y: 0 }
+    const ensureStub = (points, point, side, length, atStart) => {
+      if (!length) return
+      const vector = sideVector(side)
+      const stub = { x: point.x + vector.x * length, y: point.y + vector.y * length }
+      const index = atStart ? 1 : points.length - 1
+      const existing = points[index]
+      if (existing && Math.abs(existing.x - stub.x) < 0.1 && Math.abs(existing.y - stub.y) < 0.1) return
+      points.splice(index, 0, stub)
+    }
+    const guardIntersects = (points, guard, firstAllowed, lastAllowed) => {
+      if (!guard) return false
+      for (let index = 0; index < points.length - 1; index += 1) {
+        if ((firstAllowed && index === 0) || (lastAllowed && index === points.length - 2)) continue
+        if (c4SegmentToRectDistance(points[index], points[index + 1], guard) < 0.1) return true
+      }
+      return false
+    }
+    const dedupePoints = (points) => points.filter((point, index) => !index || Math.abs(point.x - points[index - 1].x) > 0.1 || Math.abs(point.y - points[index - 1].y) > 0.1)
     const candidates = []
     const scoreRoute = (points, baseScore = 0) => {
       const routeStart = { ...start }
@@ -5803,12 +5843,16 @@
       if (!simplified.length || Math.abs(simplified[simplified.length - 1].x - routeEnd.x) > 0.1 || Math.abs(simplified[simplified.length - 1].y - routeEnd.y) > 0.1) {
         simplified.push(routeEnd)
       } else simplified[simplified.length - 1] = routeEnd
+      ensureStub(simplified, routeStart, startSide, startStubLength, true)
+      ensureStub(simplified, routeEnd, endSide, endStubLength, false)
+      const scored = dedupePoints(simplified)
       const obstaclePenalty = obstacles.some((rectValue) => c4PolylineIntersectsRect(simplified, rectValue)) ? 100000 : 0
-      const occupiedPenalty = c4PolylineOverlapsSegments(simplified, occupiedSegments) ? 25000 : 0
-      const canvasPenalty = simplified.some((point) => point.x < 0 || point.y < 0 || (width && point.x > width) || (height && point.y > height)) ? 50000 : 0
+      const guardPenalty = (guardIntersects(scored, options.startGuard, true, false) || guardIntersects(scored, options.endGuard, false, true)) ? 120000 : 0
+      const occupiedPenalty = c4PolylineOverlapsSegments(scored, occupiedSegments) ? 25000 : 0
+      const canvasPenalty = scored.some((point) => point.x < 0 || point.y < 0 || (width && point.x > width) || (height && point.y > height)) ? 50000 : 0
       candidates.push({
-        points: simplified,
-        score: baseScore + c4PolylineLength(simplified) + c4BendCount(simplified) * 28 + obstaclePenalty + occupiedPenalty + canvasPenalty,
+        points: scored,
+        score: baseScore + c4PolylineLength(scored) + c4BendCount(scored) * 28 + obstaclePenalty + guardPenalty + occupiedPenalty + canvasPenalty,
       })
     }
     const verticalStart = startSide === 'top' || startSide === 'bottom'
@@ -5900,9 +5944,13 @@
       if (!aBox || !bBox) return ''
       const start = architectureAnchor(aBox, edge.from.side)
       const end = architectureAnchor(bBox, edge.to.side)
+      const fromNode = model.nodes.get(edge.from.id)
+      const toNode = model.nodes.get(edge.to.id)
       const route = architectureRoute(start, edge.from.side, end, edge.to.side, occupiedSegments, architectureEdgeObstacles(edge, model, layouts), width, height, {
-        startStub: model.nodes.get(edge.from.id)?.type === 'junction' ? 10 : 24,
-        endStub: model.nodes.get(edge.to.id)?.type === 'junction' ? 10 : 24,
+        startStub: fromNode?.type === 'junction' ? 10 : 24,
+        endStub: toNode?.type === 'junction' ? 10 : 24,
+        startGuard: c4InflateRect(c4RectFromBox(aBox), fromNode?.type === 'junction' ? 3 : 2),
+        endGuard: c4InflateRect(c4RectFromBox(bBox), toNode?.type === 'junction' ? 3 : 2),
       })
       c4SegmentsFromRoute(route).forEach((segment) => occupiedSegments.push(segment))
       return `<g data-architecture-edge="${attr(`${edge.from.id}:${edge.from.sideCode}->${edge.to.id}:${edge.to.sideCode}`)}">${rustPolylineArrowheads(route, t.link, false, edge.startArrow, edge.endArrow, 2)}</g>`

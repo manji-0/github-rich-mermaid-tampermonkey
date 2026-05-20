@@ -50,7 +50,7 @@ const galleryViewBoxExpectations = [
   { index: 12, type: 'C4Container', title: 'Docattice Cloudflare delivery', viewBox: '0 0 1151.1 650.0' },
   { index: 13, type: 'C4Container', title: 'Twitter-like feed delivery', viewBox: '0 0 1878.5 1108.0' },
   { index: 14, type: 'C4Container', title: 'E-commerce Checkout', viewBox: '0 0 1123.6 1324.0' },
-  { index: 15, type: 'C4Container', title: 'Diamond Topology', viewBox: '0 0 1038.1 584.0' },
+  { index: 15, type: 'C4Container', title: 'Diamond Topology', viewBox: '0 0 1046.1 584.0' },
   { index: 16, type: 'C4Container', title: 'Wide Fan-out', viewBox: '0 0 1194.0 750.0' },
   { index: 17, type: 'C4Component', title: 'Docattice worker internals', viewBox: '0 0 1495.1 988.0' },
   { index: 18, type: 'C4Component', title: 'SaaS Worker Internals', viewBox: '0 0 1701.5 946.0' },
@@ -161,8 +161,11 @@ const c4RustComplexScenarios = [
     checkRoutes({ workItems }) {
       const cacheDrop = workItemFor(workItems, 'cache_svc', 'cache_store').route.points
       const workerDrop = workItemFor(workItems, 'worker', 'db').route.points
+      const apiCache = workItemFor(workItems, 'api', 'cache_svc').route.points
+      const apiWorker = workItemFor(workItems, 'api', 'worker').route.points
       if (cacheDrop.length > 3) throw new Error(`near-aligned cache drop introduced an elbow: ${JSON.stringify(cacheDrop)}`)
       if (workerDrop.length > 3) throw new Error(`already-aligned worker drop introduced an elbow: ${JSON.stringify(workerDrop)}`)
+      if (orthogonalPathCrossingCount(apiCache, apiWorker) !== 0) throw new Error('diamond API fanout routes should not cross')
     },
   },
   {
@@ -1953,6 +1956,7 @@ function assertGalleryViewBoxes(renderer, galleryBlocks) {
     if (type === 'architecture-beta') {
       assertArchitectureRoutesAvoidNodeBodies(svg, `gallery #${expected.index} architecture-beta`)
       assertArchitectureJunctionAnchors(svg, `gallery #${expected.index} architecture-beta`)
+      assertArchitectureJunctionRoutesClearBodies(svg, `gallery #${expected.index} architecture-beta`)
     }
     if (type === 'stateDiagram-v2') {
       assertStateNodeTextCentered(svg, 'Draft', 'Draft', `gallery #${expected.index} state node`)
@@ -2544,6 +2548,37 @@ function assertArchitectureJunctionAnchors(svg, label) {
     const toCircle = circles.get(endpoints.toId)
     if (toCircle) {
       assertPointClose(points[points.length - 1], architectureJunctionAnchor(toCircle, endpoints.toSide), `${label}: architecture edge ${edgeId} ends off junction boundary`)
+    }
+  }
+}
+
+function architectureSegmentFromPoints(a, b) {
+  if (Math.abs(a.x - b.x) < 0.1 && Math.abs(a.y - b.y) > 0.1) return { orientation: 'v', axis: a.x, start: Math.min(a.y, b.y), end: Math.max(a.y, b.y) }
+  if (Math.abs(a.y - b.y) < 0.1 && Math.abs(a.x - b.x) > 0.1) return { orientation: 'h', axis: a.y, start: Math.min(a.x, b.x), end: Math.max(a.x, b.x) }
+  return null
+}
+
+function assertArchitectureJunctionRoutesClearBodies(svg, label) {
+  const circles = architectureJunctionCircles(svg)
+  const paths = architectureEdgePaths(svg)
+  for (const [edgeId, points] of paths.entries()) {
+    const endpoints = architectureEdgeEndpointSides(edgeId)
+    if (!endpoints || points.length < 2) continue
+    for (const [junctionId, circleValue] of circles.entries()) {
+      const rectValue = {
+        left: circleValue.cx - circleValue.r - 3,
+        top: circleValue.cy - circleValue.r - 3,
+        right: circleValue.cx + circleValue.r + 3,
+        bottom: circleValue.cy + circleValue.r + 3,
+      }
+      for (let index = 0; index < points.length - 1; index += 1) {
+        if (junctionId === endpoints.fromId && index === 0) continue
+        if (junctionId === endpoints.toId && index === points.length - 2) continue
+        const segment = architectureSegmentFromPoints(points[index], points[index + 1])
+        if (segment && segmentIntersectsRect(segment, rectValue)) {
+          throw new Error(`${label}: architecture edge ${edgeId} crosses junction ${junctionId}`)
+        }
+      }
     }
   }
 }
