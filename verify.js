@@ -1218,6 +1218,12 @@ UI :active, ui, 2026-03-05, 5d`,
       assertIncludes(svg, '>Web</text>', this.name)
       assertIncludes(svg, '>4d</text>', this.name)
       assertIncludes(svg, '>5d</text>', this.name)
+      const backgroundIndex = svg.indexOf('fill-opacity="0.10"')
+      const gridIndex = svg.indexOf('stroke-dasharray="4 4"')
+      const labelIndex = svg.indexOf('>Backend</text>')
+      if (!(backgroundIndex >= 0 && backgroundIndex < gridIndex && gridIndex < labelIndex)) {
+        throw new Error('Gantt layers should render backgrounds behind grid and labels')
+      }
     },
   },
   {
@@ -1815,6 +1821,11 @@ return {
   replacementHtml,
   errorHtml,
   extractMermaidFences,
+  extractAllMermaidFences,
+  rememberRawMarkdownSources,
+  rawMarkdownSourceForElement,
+  mermaidHeadingDiagramType,
+  shouldRenderSourceAtElement,
 }
 })()`,
   )
@@ -2070,6 +2081,56 @@ function assertGitHubReplacementShell(renderer) {
   assertIncludes(error, 'boom &lt;unsafe&gt;', 'GitHub error shell')
   if (error.includes('boom <unsafe>')) throw new Error('GitHub error shell should escape error text')
 
+  const mixedMarkdown = [
+    '```mermaid',
+    'venn',
+    '  A',
+    '```',
+    '',
+    '```mermaid',
+    'C4Container',
+    '  Container(api, "API", "Go", "Entry point")',
+    '```',
+  ].join('\n')
+  if (renderer.extractAllMermaidFences(mixedMarkdown).length !== 2) {
+    throw new Error('Raw Mermaid extraction should keep unsupported fences for positional matching')
+  }
+  if (renderer.extractMermaidFences(mixedMarkdown).length !== 1) {
+    throw new Error('Supported Mermaid extraction should still filter unsupported fences')
+  }
+  renderer.rememberRawMarkdownSources(mixedMarkdown)
+  const firstElement = {}
+  const secondElement = {}
+  if (diagramType(renderer.rawMarkdownSourceForElement(firstElement)) !== 'venn') {
+    throw new Error('Raw source mapping should consume unsupported fences instead of skipping to the next supported diagram')
+  }
+  if (diagramType(renderer.rawMarkdownSourceForElement(secondElement)) !== 'C4Container') {
+    throw new Error('Raw source mapping should preserve source order after unsupported fences')
+  }
+  renderer.rememberRawMarkdownSources(mixedMarkdown)
+  if (diagramType(renderer.rawMarkdownSourceForElement({}, 'C4Container')) !== 'C4Container') {
+    throw new Error('Typed raw source mapping should skip unsupported fences without assigning them to supported render slots')
+  }
+  if (renderer.mermaidHeadingDiagramType('Venn') !== 'venn') {
+    throw new Error('Heading type detection should recognize Venn sections')
+  }
+  const vennHeading = {
+    textContent: 'Venn',
+    matches: (selector) => selector.includes('h3'),
+    previousElementSibling: null,
+  }
+  const directive = {
+    matches: () => false,
+    previousElementSibling: vennHeading,
+  }
+  const renderedBlock = {
+    matches: () => false,
+    previousElementSibling: directive,
+    parentElement: null,
+  }
+  if (renderer.shouldRenderSourceAtElement(renderedBlock, 'C4Container\n  Container(api, "API", "Go", "Entry point")')) {
+    throw new Error('Unsupported section headings should block fallback assignment of a different supported diagram')
+  }
   const fences = renderer.extractMermaidFences(`x\n\`\`\`mermaid\n${source}\n\`\`\`\ny`)
   if (fences.length !== 1 || fences[0] !== source) throw new Error('GitHub fence extraction should preserve supported source')
 }

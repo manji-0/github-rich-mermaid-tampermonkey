@@ -40,9 +40,25 @@
     'zenuml',
     'sequenceDiagram',
   ])
+  const UNSUPPORTED_GITHUB_TYPES = new Set([
+    'architecture-beta',
+    'block-beta',
+    'C4Code',
+    'classDiagram',
+    'kanban',
+    'packet-beta',
+    'radar-beta',
+    'sankey',
+    'stateDiagram-v2',
+    'treemap-beta',
+    'venn',
+    'venn-beta',
+    'xychart',
+  ])
 
   const stageCache = new Map()
-  const capturedMermaidSources = []
+  const rawMermaidSources = []
+  const rawSourceByElement = new WeakMap()
   const renderQueue = []
   let activeRenderCount = 0
   let observer = null
@@ -98,26 +114,87 @@
     return SUPPORTED_TYPES.has(type) ? type : ''
   }
 
-  function rememberMermaidSource(source) {
-    if (!supportedDiagramType(source)) return
-    if (capturedMermaidSources.includes(source)) return
-    capturedMermaidSources.push(source)
+  function mermaidHeadingDiagramType(value) {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+    const aliases = new Map([
+      ['architecture', 'architecture-beta'],
+      ['architecturebeta', 'architecture-beta'],
+      ['block', 'block-beta'],
+      ['blockbeta', 'block-beta'],
+      ['c4code', 'C4Code'],
+      ['classdiagram', 'classDiagram'],
+      ['kanban', 'kanban'],
+      ['packet', 'packet-beta'],
+      ['packetbeta', 'packet-beta'],
+      ['radar', 'radar-beta'],
+      ['radarbeta', 'radar-beta'],
+      ['sankey', 'sankey'],
+      ['statediagram', 'stateDiagram-v2'],
+      ['statediagramv2', 'stateDiagram-v2'],
+      ['treemap', 'treemap-beta'],
+      ['treemapbeta', 'treemap-beta'],
+      ['venn', 'venn'],
+      ['vennbeta', 'venn-beta'],
+      ['xychart', 'xychart'],
+    ])
+    return aliases.get(normalized) || ''
   }
 
-  function takeCapturedMermaidSource() {
-    return capturedMermaidSources.shift() || null
+  function nearestMarkdownHeadingText(element) {
+    let current = element
+    for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+      let sibling = current.previousElementSibling
+      for (let steps = 0; sibling && steps < 8; steps += 1, sibling = sibling.previousElementSibling) {
+        if (sibling.matches?.('h1,h2,h3,h4,h5,h6')) return sibling.textContent || ''
+      }
+    }
+    return ''
   }
 
-  function extractMermaidFences(markdown) {
+  function shouldRenderSourceAtElement(element, source) {
+    const headingType = mermaidHeadingDiagramType(nearestMarkdownHeadingText(element))
+    if (headingType && UNSUPPORTED_GITHUB_TYPES.has(headingType)) return false
+    return Boolean(supportedDiagramType(source))
+  }
+
+  function extractAllMermaidFences(markdown) {
     const sources = []
     const fence = /```mermaid[^\n]*\n([\s\S]*?)```/gi
     let match = fence.exec(markdown)
     while (match) {
       const source = match[1].trim()
-      if (supportedDiagramType(source)) sources.push(source)
+      if (source) sources.push(source)
       match = fence.exec(markdown)
     }
     return sources
+  }
+
+  function extractMermaidFences(markdown) {
+    return extractAllMermaidFences(markdown).filter((source) => supportedDiagramType(source))
+  }
+
+  function rememberRawMarkdownSources(markdown) {
+    rawMermaidSources.splice(0, rawMermaidSources.length, ...extractAllMermaidFences(markdown))
+  }
+
+  function rawMarkdownSourceForElement(element, expectedType = '') {
+    if (!element || !rawMermaidSources.length) return null
+    if (rawSourceByElement.has(element)) return rawSourceByElement.get(element) || null
+    let source = ''
+    while (rawMermaidSources.length) {
+      const candidate = rawMermaidSources.shift() || ''
+      if (!expectedType || detectMermaidDiagramType(candidate) === expectedType) {
+        source = candidate
+        break
+      }
+    }
+    rawSourceByElement.set(element, source)
+    return source || null
+  }
+
+  function supportedRoleDiagramType(element) {
+    const role = element?.getAttribute?.('aria-roledescription') || ''
+    return SUPPORTED_TYPES.has(role) ? role : ''
   }
 
   function sourceFromGitHubDataContent(element) {
@@ -127,7 +204,6 @@
       const parsed = JSON.parse(raw)
       const source = typeof parsed?.data === 'string' ? decodeHtmlEntities(parsed.data) : ''
       if (!supportedDiagramType(source)) return null
-      rememberMermaidSource(source)
       return source
     } catch (_error) {
       return null
@@ -139,19 +215,19 @@
     const target = section.querySelector?.('.js-render-enrichment-target')
     if (target) {
       const plain = target.getAttribute('data-plain') || ''
-      if (supportedDiagramType(plain)) { rememberMermaidSource(plain); return plain }
+      if (supportedDiagramType(plain)) { return plain }
       const dataJson = target.getAttribute('data-json')
       if (dataJson) {
         try {
           const parsed = JSON.parse(dataJson)
           const source = typeof parsed?.data === 'string' ? decodeHtmlEntities(parsed.data) : ''
-          if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+          if (supportedDiagramType(source)) { return source }
         } catch (_) {}
       }
     }
     // 2. data-plain directly on the section element (pre-enrichment state)
     const sectionPlain = decodeHtmlEntities(section.getAttribute('data-plain') || '')
-    if (supportedDiagramType(sectionPlain)) { rememberMermaidSource(sectionPlain); return sectionPlain }
+    if (supportedDiagramType(sectionPlain)) return sectionPlain
     // 3. iframe data-content inside section (enrichment complete, iframe has JSON payload)
     const iframe = section.querySelector?.('iframe[data-content]')
     if (iframe) {
@@ -162,7 +238,7 @@
     const pre = section.querySelector?.('pre[lang="mermaid"]')
     if (pre) {
       const source = pre.textContent?.trim() || ''
-      if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+      if (supportedDiagramType(source)) { return source }
     }
     // 5. GitHub-rendered SVG: aria-roledescription matches Mermaid type, find source from siblings
     const renderedSvg = section.querySelector?.('svg[aria-roledescription]')
@@ -173,7 +249,7 @@
       const anyPre = section.querySelector?.('pre')
       if (anyPre) {
         const source = anyPre.textContent?.trim() || ''
-        if (supportedDiagramType(source)) { rememberMermaidSource(source); return source }
+        if (supportedDiagramType(source)) { return source }
       }
       console.log('[mermaid-rich] sourceFromRenderSection: SVG found but no source. role=', role, 'section:', section.outerHTML.slice(0, 300))
     }
@@ -221,7 +297,7 @@
       const response = await fetch(rawUrl, { credentials: 'same-origin' })
       if (!response.ok) return
       const markdown = await response.text()
-      extractMermaidFences(markdown).forEach((source) => rememberMermaidSource(source))
+      rememberRawMarkdownSources(markdown)
       rawMarkdownLoaded = true
       scan()
     } catch (_error) {
@@ -4241,38 +4317,40 @@
     const width = Math.max(720, chartLeft + chartW + 40)
     const height = contentY + contentH + 24
     const tickInterval = totalDays > 90 ? 14 : 7
-    const axis = []
+    const gridLayer = []
+    const labelLayer = []
     for (let day = 0; day <= totalDays; day += tickInterval) {
       const gx = chartLeft + day * dayW
       if (gx > width - 20) break
-      axis.push(text(gx, topY + 18, dateLabel(addDays(minDate, day)), 10, 500, t.muted))
-      axis.push(`<line x1="${gx.toFixed(1)}" y1="${contentY.toFixed(1)}" x2="${gx.toFixed(1)}" y2="${(contentY + contentH).toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" stroke-dasharray="4 4" opacity="0.35"/>`)
+      labelLayer.push(text(gx, topY + 18, dateLabel(addDays(minDate, day)), 10, 500, t.muted))
+      gridLayer.push(`<line x1="${gx.toFixed(1)}" y1="${contentY.toFixed(1)}" x2="${gx.toFixed(1)}" y2="${(contentY + contentH).toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" stroke-dasharray="4 4" opacity="0.35"/>`)
     }
-    axis.push(line(0, contentY, width, contentY, t.border))
-    axis.push(line(labelW, topY, labelW, contentY + contentH, t.border))
+    gridLayer.push(line(0, contentY, width, contentY, t.border))
+    gridLayer.push(line(labelW, topY, labelW, contentY + contentH, t.border))
     let y = contentY
-    const body = []
+    const backgroundLayer = []
+    const foregroundLayer = []
     sections.forEach((sec, secIndex) => {
       const secColor = palette[secIndex % palette.length]
-      body.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${sectionH}" fill="${secColor}" fill-opacity="0.10" stroke="none"/>`)
-      body.push(text(16, y + 18, sec.name, 11, 700, secColor, 'start'))
+      backgroundLayer.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${sectionH}" fill="${secColor}" fill-opacity="0.10" stroke="none"/>`)
+      foregroundLayer.push(text(16, y + 18, sec.name, 11, 700, secColor, 'start'))
       y += sectionH
       sec.indices.forEach((taskIndex, localIndex) => {
         const task = tasks[taskIndex]
-        if (localIndex % 2 === 1) body.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${rowH}" fill="${t.text}" fill-opacity="0.03" stroke="none"/>`)
-        body.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${width.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" opacity="0.12"/>`)
-        body.push(text(24, y + 22, truncateLabel(task.name, labelW - 40), 12, 500, t.text, 'start'))
+        if (localIndex % 2 === 1) backgroundLayer.push(`<rect x="0" y="${y.toFixed(1)}" width="${width.toFixed(1)}" height="${rowH}" fill="${t.text}" fill-opacity="0.03" stroke="none"/>`)
+        gridLayer.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${width.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${t.muted}" stroke-width="0.5" opacity="0.12"/>`)
+        foregroundLayer.push(text(24, y + 22, truncateLabel(task.name, labelW - 40), 12, 500, t.text, 'start'))
         const startDays = task.start ? daysBetween(task.start, minDate) : taskIndex * 2
         const bx = chartLeft + startDays * dayW
         const bw = Math.max(32, Math.max(1, task.days) * dayW)
         const fill = task.state.includes('done') ? t.success : task.state.includes('active') ? t.accent : secColor
-        body.push(rect(bx, y + 9, bw, 18, 9, fill, 'none'))
+        foregroundLayer.push(rect(bx, y + 9, bw, 18, 9, fill, 'none'))
         const durLabel = `${task.days}d`
-        if (bw > c4EstimateTextWidth(durLabel, 10, 700) + 12) body.push(text(bx + 8, y + 22, durLabel, 10, 700, t.surface, 'start'))
+        if (bw > c4EstimateTextWidth(durLabel, 10, 700) + 12) foregroundLayer.push(text(bx + 8, y + 22, durLabel, 10, 700, t.surface, 'start'))
         y += rowH
       })
     })
-    return rustSvgWithTitle(width, height, title, `${axis.join('')}${body.join('')}`, 'Gantt chart')
+    return rustSvgWithTitle(width, height, title, `${backgroundLayer.join('')}${gridLayer.join('')}${labelLayer.join('')}${foregroundLayer.join('')}`, 'Gantt chart')
   }
 
   function renderPie(source) {
@@ -5025,7 +5103,6 @@
     }
     const source = codeElement.textContent || ''
     if (!supportedDiagramType(source)) return null
-    rememberMermaidSource(source)
     return source
   }
 
@@ -5036,13 +5113,26 @@
     if (githubDataContent) return githubDataContent
     if (element instanceof HTMLIFrameElement) {
       loadRawMarkdownSources()
-      return takeCapturedMermaidSource()
+      return null
     }
     const textContent = element.textContent || ''
     if (supportedDiagramType(textContent)) return textContent
-    const captured = element.querySelector?.('svg') ? takeCapturedMermaidSource() : null
-    if (!captured) loadRawMarkdownSources()
-    return captured
+    const ownRoleType = supportedRoleDiagramType(element)
+    if (ownRoleType) {
+      const source = rawMarkdownSourceForElement(element, ownRoleType)
+      return supportedDiagramType(source) ? source : null
+    }
+    if (element.querySelector?.('svg')) {
+      const nestedRoleType = supportedRoleDiagramType(element.querySelector('svg[aria-roledescription]'))
+      if (!nestedRoleType) {
+        loadRawMarkdownSources()
+        return null
+      }
+      const source = rawMarkdownSourceForElement(element, nestedRoleType)
+      if (supportedDiagramType(source)) return source
+    }
+    loadRawMarkdownSources()
+    return null
   }
 
   function replacementHtml(source, renderedSvg) {
@@ -5147,7 +5237,7 @@
       if (section.closest('.docattice-github-mermaid')) return
       if (section.getAttribute(ENHANCED_ATTR)) return
       const source = sourceFromRenderSection(section)
-      if (source) {
+      if (source && shouldRenderSourceAtElement(section, source)) {
         console.log('[mermaid-rich] section: replacing', detectMermaidDiagramType(source), section)
         enqueueRender(section, source)
       }
@@ -5161,7 +5251,7 @@
       const section = svgElement.closest('section.js-render-needs-enrichment, section.render-needs-enrichment')
       if (!section || section.getAttribute(ENHANCED_ATTR)) return
       const source = sourceFromRenderSection(section)
-      if (source) {
+      if (source && shouldRenderSourceAtElement(section, source)) {
         console.log('[mermaid-rich] svg-in-section: replacing', detectMermaidDiagramType(source), section)
         enqueueRender(section, source)
       }
@@ -5182,21 +5272,24 @@
     root.querySelectorAll?.(selectors).forEach((element) => {
       if (element.closest('.docattice-github-mermaid')) return
       const source = sourceFromMermaidElement(element)
-      if (source) enqueueRender(githubRenderTargetFor(element), source)
+      const viewer = githubRenderTargetFor(element)
+      if (source && shouldRenderSourceAtElement(viewer, source)) enqueueRender(viewer, source)
     })
     root.querySelectorAll?.('svg').forEach((svgElement) => {
       if (svgElement.closest('.docattice-github-mermaid')) return
       if (!svgElement.closest('.markdown-body, article, [data-testid="file-rendered"]')) return
       const bounds = svgElement.getBoundingClientRect?.()
       if (bounds && (bounds.width < 120 || bounds.height < 80)) return
-      if (!capturedMermaidSources.length) {
+      const roleType = supportedRoleDiagramType(svgElement)
+      if (!roleType) return
+      if (!rawMermaidSources.length) {
         loadRawMarkdownSources()
         return
       }
       const viewer = githubRenderTargetFor(svgElement.closest('clipboard-copy, div, figure, pre') || svgElement)
       if (!viewer || viewer.getAttribute?.(ENHANCED_ATTR)) return
-      const source = takeCapturedMermaidSource()
-      if (source) enqueueRender(viewer, source)
+      const source = rawMarkdownSourceForElement(viewer, roleType)
+      if (shouldRenderSourceAtElement(viewer, source)) enqueueRender(viewer, source)
     })
     root.querySelectorAll?.('iframe').forEach((iframe) => {
       if (iframe.closest('.docattice-github-mermaid')) return
@@ -5204,14 +5297,7 @@
       const src = iframe.getAttribute('src') || ''
       const title = iframe.getAttribute('title') || ''
       if (!/mermaid|viewscreen/i.test(`${src} ${title}`)) return
-      if (!capturedMermaidSources.length) {
-        loadRawMarkdownSources()
-        return
-      }
-      const viewer = githubRenderTargetFor(iframe.closest('div, figure, pre') || iframe)
-      if (!viewer || viewer.getAttribute?.(ENHANCED_ATTR)) return
-      const source = takeCapturedMermaidSource()
-      if (source) enqueueRender(viewer, source)
+      loadRawMarkdownSources()
     })
   }
 
@@ -5226,7 +5312,7 @@
     if (node.matches?.('section.js-render-needs-enrichment, section.render-needs-enrichment')) {
       if (!node.getAttribute(ENHANCED_ATTR)) {
         const source = sourceFromRenderSection(node)
-        if (source) enqueueRender(node, source)
+        if (source && shouldRenderSourceAtElement(node, source)) enqueueRender(node, source)
       }
       return
     }
@@ -5236,7 +5322,7 @@
       const section = node.closest('section.js-render-needs-enrichment, section.render-needs-enrichment')
       if (section && !section.getAttribute(ENHANCED_ATTR)) {
         const source = sourceFromRenderSection(section)
-        if (source) enqueueRender(section, source)
+        if (source && shouldRenderSourceAtElement(section, source)) enqueueRender(section, source)
         return
       }
     }
