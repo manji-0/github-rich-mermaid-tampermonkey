@@ -1931,15 +1931,16 @@ function assertGalleryViewBoxes(renderer, galleryBlocks) {
     if (expected.title != null && titleOf(source) !== expected.title) {
       throw new Error(`gallery #${expected.index}: expected title ${expected.title}, got ${titleOf(source)}`)
     }
-    const actual = viewBoxOf(renderer.renderMermaidSvg(source), `gallery #${expected.index} ${type}`)
+    const svg = renderer.renderMermaidSvg(source)
+    const actual = viewBoxOf(svg, `gallery #${expected.index} ${type}`)
     if (actual !== expected.viewBox) {
       throw new Error(`gallery #${expected.index} ${type}: viewBox ${actual}, expected ${expected.viewBox}`)
     }
     if (type === 'architecture-beta') {
-      assertArchitectureRoutesAvoidNodeBodies(renderer.renderMermaidSvg(source), `gallery #${expected.index} architecture-beta`)
+      assertArchitectureRoutesAvoidNodeBodies(svg, `gallery #${expected.index} architecture-beta`)
+      assertArchitectureJunctionAnchors(svg, `gallery #${expected.index} architecture-beta`)
     }
     if (type === 'stateDiagram-v2') {
-      const svg = renderer.renderMermaidSvg(source)
       assertPillTextCentered(svg, 'analyze ok', `gallery #${expected.index} state label`)
       assertPillTextCentered(svg, 'publish', `gallery #${expected.index} state label`)
     }
@@ -2416,6 +2417,21 @@ function architectureNodeBodyRects(svg) {
   return rects
 }
 
+function architectureJunctionCircles(svg) {
+  const circles = new Map()
+  const pattern = /<g data-architecture-node="junction" data-architecture-id="([^"]+)">([\s\S]*?)<\/g>/g
+  let match
+  while ((match = pattern.exec(svg))) {
+    const circleTag = match[2].match(/<circle\b[^>]*>/)?.[0]
+    if (!circleTag) continue
+    const cx = Number(svgAttrValue(circleTag, 'cx'))
+    const cy = Number(svgAttrValue(circleTag, 'cy'))
+    const r = Number(svgAttrValue(circleTag, 'r'))
+    if ([cx, cy, r].every(Number.isFinite)) circles.set(match[1], { cx, cy, r })
+  }
+  return circles
+}
+
 function architectureEdgePaths(svg) {
   const paths = new Map()
   const pattern = /<g data-architecture-edge="([^"]+)">([\s\S]*?)<\/g>/g
@@ -2430,6 +2446,41 @@ function architectureEdgePaths(svg) {
 function architectureEdgeEndpointIds(edgeId) {
   const match = edgeId.match(/^([^:]+):[TBLR]->([^:]+):[TBLR]$/)
   return match ? new Set([match[1], match[2]]) : new Set()
+}
+
+function architectureEdgeEndpointSides(edgeId) {
+  const match = edgeId.match(/^([^:]+):([TBLR])->([^:]+):([TBLR])$/)
+  return match ? { fromId: match[1], fromSide: match[2], toId: match[3], toSide: match[4] } : null
+}
+
+function architectureJunctionAnchor(circle, side) {
+  if (side === 'T') return { x: circle.cx, y: circle.cy - circle.r }
+  if (side === 'B') return { x: circle.cx, y: circle.cy + circle.r }
+  if (side === 'L') return { x: circle.cx - circle.r, y: circle.cy }
+  return { x: circle.cx + circle.r, y: circle.cy }
+}
+
+function assertPointClose(actual, expected, label) {
+  if (!actual || Math.abs(actual.x - expected.x) > 0.1 || Math.abs(actual.y - expected.y) > 0.1) {
+    throw new Error(`${label}: expected (${expected.x}, ${expected.y}), got ${actual ? `(${actual.x}, ${actual.y})` : 'missing point'}`)
+  }
+}
+
+function assertArchitectureJunctionAnchors(svg, label) {
+  const circles = architectureJunctionCircles(svg)
+  const paths = architectureEdgePaths(svg)
+  for (const [edgeId, points] of paths.entries()) {
+    const endpoints = architectureEdgeEndpointSides(edgeId)
+    if (!endpoints || points.length < 2) continue
+    const fromCircle = circles.get(endpoints.fromId)
+    if (fromCircle) {
+      assertPointClose(points[0], architectureJunctionAnchor(fromCircle, endpoints.fromSide), `${label}: architecture edge ${edgeId} starts off junction boundary`)
+    }
+    const toCircle = circles.get(endpoints.toId)
+    if (toCircle) {
+      assertPointClose(points[points.length - 1], architectureJunctionAnchor(toCircle, endpoints.toSide), `${label}: architecture edge ${edgeId} ends off junction boundary`)
+    }
+  }
 }
 
 function assertArchitectureRoutesAvoidNodeBodies(svg, label) {

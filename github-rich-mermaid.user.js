@@ -1368,23 +1368,23 @@
 
   function routeViaVerticalAxis(start, end, axis, startTurnY, endTurnY) {
     return simplifyPolyline([
-      start,
+      { ...start },
       { x: start.x, y: startTurnY },
       { x: axis, y: startTurnY },
       { x: axis, y: endTurnY },
       { x: end.x, y: endTurnY },
-      end,
+      { ...end },
     ])
   }
 
   function routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX) {
     return simplifyPolyline([
-      start,
+      { ...start },
       { x: startTurnX, y: start.y },
       { x: startTurnX, y: axis },
       { x: endTurnX, y: axis },
       { x: endTurnX, y: end.y },
-      end,
+      { ...end },
     ])
   }
 
@@ -5783,11 +5783,18 @@
     return points.filter((point, index, items) => !index || Math.abs(point.x - items[index - 1].x) > 0.1 || Math.abs(point.y - items[index - 1].y) > 0.1)
   }
 
-  function architectureRoute(start, startSide, end, endSide, occupiedSegments = [], obstacles = [], width = 0, height = 0) {
-    const stub = 24
+  function architectureRoute(start, startSide, end, endSide, occupiedSegments = [], obstacles = [], width = 0, height = 0, options = {}) {
+    const startStubLength = options.startStub ?? 24
+    const endStubLength = options.endStub ?? 24
     const candidates = []
     const scoreRoute = (points, baseScore = 0) => {
-      const simplified = simplifyPolyline(points)
+      const routeStart = { ...start }
+      const routeEnd = { ...end }
+      const simplified = simplifyPolyline(points.map((point) => ({ ...point })))
+      if (simplified.length) simplified[0] = routeStart
+      if (!simplified.length || Math.abs(simplified[simplified.length - 1].x - routeEnd.x) > 0.1 || Math.abs(simplified[simplified.length - 1].y - routeEnd.y) > 0.1) {
+        simplified.push(routeEnd)
+      } else simplified[simplified.length - 1] = routeEnd
       const obstaclePenalty = obstacles.some((rectValue) => c4PolylineIntersectsRect(simplified, rectValue)) ? 100000 : 0
       const occupiedPenalty = c4PolylineOverlapsSegments(simplified, occupiedSegments) ? 25000 : 0
       const canvasPenalty = simplified.some((point) => point.x < 0 || point.y < 0 || (width && point.x > width) || (height && point.y > height)) ? 50000 : 0
@@ -5800,8 +5807,8 @@
     if (verticalStart) {
       const startDir = startSide === 'bottom' ? 1 : -1
       const endDir = endSide === 'top' ? -1 : endSide === 'bottom' ? 1 : 0
-      const startTurnY = start.y + startDir * stub
-      const endTurnY = end.y + endDir * stub
+      const startTurnY = start.y + startDir * startStubLength
+      const endTurnY = end.y + endDir * endStubLength
       const axes = [start.x, end.x, (start.x + end.x) / 2, Math.min(start.x, end.x) - 48, Math.max(start.x, end.x) + 48]
       obstacles.forEach((rectValue) => axes.push(rectValue.left - 16, rectValue.right + 16))
       occupiedSegments.filter((segment) => segment.orientation === 'vertical').forEach((segment) => axes.push(segment.axis - 18, segment.axis + 18))
@@ -5811,8 +5818,8 @@
     } else {
       const startDir = startSide === 'right' ? 1 : -1
       const endDir = endSide === 'left' ? -1 : endSide === 'right' ? 1 : 0
-      const startTurnX = start.x + startDir * stub
-      const endTurnX = end.x + endDir * stub
+      const startTurnX = start.x + startDir * startStubLength
+      const endTurnX = end.x + endDir * endStubLength
       const axes = [start.y, end.y, (start.y + end.y) / 2, Math.min(start.y, end.y) - 48, Math.max(start.y, end.y) + 48]
       obstacles.forEach((rectValue) => axes.push(rectValue.top - 16, rectValue.bottom + 16))
       occupiedSegments.filter((segment) => segment.orientation === 'horizontal').forEach((segment) => axes.push(segment.axis - 18, segment.axis + 18))
@@ -5820,9 +5827,9 @@
         .filter((axis) => axis >= 12 && (!height || axis <= height - 12))
         .forEach((axis) => scoreRoute(routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX), Math.abs(axis - end.y) * 0.4))
     }
-    scoreRoute(architectureRouteFallback(start, startSide, end, endSide, stub), 80)
+    scoreRoute(architectureRouteFallback(start, startSide, end, endSide, Math.max(startStubLength, endStubLength)), 80)
     candidates.sort((a, b) => a.score - b.score || c4PolylineLength(a.points) - c4PolylineLength(b.points))
-    return candidates[0]?.points || architectureRouteFallback(start, startSide, end, endSide, stub)
+    return candidates[0]?.points || architectureRouteFallback(start, startSide, end, endSide, Math.max(startStubLength, endStubLength))
   }
 
   function architectureEdgeObstacles(edge, model, layouts) {
@@ -5885,7 +5892,10 @@
       if (!aBox || !bBox) return ''
       const start = architectureAnchor(aBox, edge.from.side)
       const end = architectureAnchor(bBox, edge.to.side)
-      const route = architectureRoute(start, edge.from.side, end, edge.to.side, occupiedSegments, architectureEdgeObstacles(edge, model, layouts), width, height)
+      const route = architectureRoute(start, edge.from.side, end, edge.to.side, occupiedSegments, architectureEdgeObstacles(edge, model, layouts), width, height, {
+        startStub: model.nodes.get(edge.from.id)?.type === 'junction' ? 10 : 24,
+        endStub: model.nodes.get(edge.to.id)?.type === 'junction' ? 10 : 24,
+      })
       c4SegmentsFromRoute(route).forEach((segment) => occupiedSegments.push(segment))
       return `<g data-architecture-edge="${attr(`${edge.from.id}:${edge.from.sideCode}->${edge.to.id}:${edge.to.sideCode}`)}">${rustPolylineArrowheads(route, t.link, false, edge.startArrow, edge.endArrow, 2)}</g>`
     }).join('')
