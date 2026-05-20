@@ -435,6 +435,31 @@
     }
   }
 
+  function constraintCreatesCycle(constraints, before, after) {
+    const adjacency = new Map()
+    for (const [left, right] of constraints) {
+      if (!adjacency.has(left)) adjacency.set(left, [])
+      adjacency.get(left).push(right)
+    }
+    const stack = [after]
+    const seen = new Set()
+    while (stack.length) {
+      const current = stack.pop()
+      if (current === before) return true
+      if (seen.has(current)) continue
+      seen.add(current)
+      for (const next of adjacency.get(current) || []) stack.push(next)
+    }
+    return false
+  }
+
+  function pushUniqueAcyclicConstraint(constraints, before, after) {
+    if (!before || !after || before === after) return
+    if (constraints.some(([left, right]) => left === before && right === after)) return
+    if (constraintCreatesCycle(constraints, before, after)) return
+    constraints.push([before, after])
+  }
+
   function solveRankConstraints(children, constraints) {
     const adjacency = new Map(children.map((child) => [child, []]))
     const indegree = new Map(children.map((child) => [child, 0]))
@@ -1923,6 +1948,14 @@
       return null
     }
     const parseFlowchartConnection = (row) => {
+      const spacedLabel = row.match(/^(.+?)\s+(-\.|--|==)\s+(.+?)\s+(\.-|\.->|---|-->|===|==>)\s+(.+)$/)
+      if (spacedLabel) {
+        const from = readNode(spacedLabel[1])
+        const to = readNode(spacedLabel[5])
+        const edge = parseFlowchartEdgeSegment(`${spacedLabel[2]}${spacedLabel[3]}${spacedLabel[4]}`)
+          || { style: spacedLabel[2] === '-.' ? 'dotted' : spacedLabel[2] === '==' ? 'thick' : 'solid', startArrow: false, endArrow: spacedLabel[4].includes('>'), label: rawMermaidText(spacedLabel[3]) }
+        return [{ from, to, ...edge }]
+      }
       const tokens = tokenizeFlowchartLine(row)
       const parsed = []
       let cursor = 0
@@ -2063,7 +2096,7 @@
         const from = immediateChildFor(container, edge.from)
         const to = immediateChildFor(container, edge.to)
         if (!from || !to || from === to || !childIds.includes(from) || !childIds.includes(to)) return
-        pushUniqueConstraint(rankConstraints, from, to)
+        pushUniqueAcyclicConstraint(rankConstraints, from, to)
         if (!relations.some((relation) => relation.from === from && relation.to === to)) relations.push({ from, to, weight: 1 })
       })
       if (!rankConstraints.length && childIds.length > 1) {
@@ -5244,6 +5277,7 @@
       }
       .docattice-github-mermaid__stage svg {
         display: block;
+        margin: 0 auto;
         max-width: 100%;
         height: auto;
       }

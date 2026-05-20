@@ -8,7 +8,7 @@ const cp = require('child_process')
 const vm = require('vm')
 
 const root = path.resolve(__dirname, '../..')
-const scriptPath = path.join(__dirname, 'github-docattice-mermaid.user.js')
+const scriptPath = path.join(__dirname, 'github-rich-mermaid.user.js')
 const galleryPath = path.join(root, 'docs/50-gallery/28-mermaid-diagram-gallery.md')
 
 const requestedDiagramTypes = new Set([
@@ -873,6 +873,23 @@ const flowchartRustSamples = [
     check({ svg }) {
       assertIncludes(svg, 'viewBox="0 0 720.0 200.0"', this.name)
       for (const edge of ['Draft->Analyze', 'Analyze->Publish']) assertIncludes(svg, `data-flowchart-edge="${edge}"`, this.name)
+    },
+  },
+  {
+    name: 'Flowchart LR keeps back edges from collapsing ranks',
+    source: `flowchart LR
+  A[Write] --> B{Review}
+  B -- Approved --> C[Merge]
+  B -- Changes --> A`,
+    check({ svg }) {
+      assertIncludes(svg, 'viewBox="0 0 768.0 280.0"', this.name)
+      const a = flowchartNodeBounds(svg, 'A')
+      const b = flowchartNodeBounds(svg, 'B')
+      const c = flowchartNodeBounds(svg, 'C')
+      if (!(a.x < b.x && b.x < c.x)) {
+        throw new Error(`Flowchart LR cyclic sample should remain horizontal: A=${a.x}, B=${b.x}, C=${c.x}`)
+      }
+      for (const edge of ['A->B', 'B->C', 'B->A']) assertIncludes(svg, `data-flowchart-edge="${edge}"`, this.name)
     },
   },
   {
@@ -2156,6 +2173,20 @@ function flowchartNodeBounds(svg, id) {
     const cy = Number(svgAttrValue(circle, 'cy'))
     const r = Number(svgAttrValue(circle, 'r'))
     return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 }
+  }
+  const pathStart = group.indexOf('<path ')
+  if (pathStart >= 0) {
+    const path = group.slice(pathStart, group.indexOf('>', pathStart) + 1)
+    const numbers = (svgAttrValue(path, 'd').match(/-?\d+(?:\.\d+)?/g) || []).map(Number)
+    const xs = numbers.filter((_, index) => index % 2 === 0)
+    const ys = numbers.filter((_, index) => index % 2 === 1)
+    if (xs.length && ys.length) {
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    }
   }
   throw new Error(`flowchart node ${id} has no measurable shape`)
 }
