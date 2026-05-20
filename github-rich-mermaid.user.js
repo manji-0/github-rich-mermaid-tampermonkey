@@ -1407,10 +1407,32 @@
     return false
   }
 
-  function routeC4Relation(rel, from, to, occupiedSegments = [], obstacles = [], allowedRegion = null, displayLabel = '') {
+  function c4PolylineCrossesSegments(points, occupiedSegments) {
+    const segments = c4SegmentsFromRoute(points)
+    for (const seg of segments) {
+      for (const occupied of occupiedSegments) {
+        if (seg.orientation === occupied.orientation) continue
+        const vertical = seg.orientation === 'vertical' ? seg : occupied
+        const horizontal = seg.orientation === 'horizontal' ? seg : occupied
+        if (
+          vertical.axis > horizontal.start + 0.1 &&
+          vertical.axis < horizontal.end - 0.1 &&
+          horizontal.axis > vertical.start + 0.1 &&
+          horizontal.axis < vertical.end - 0.1
+        ) return true
+      }
+    }
+    return false
+  }
+
+  function routeC4Relation(rel, from, to, occupiedSegments = [], obstacles = [], allowedRegion = null, displayLabel = '', sourcePortOffset = { x: 0, y: 0 }, targetPortOffset = { x: 0, y: 0 }) {
     const [fromSide, toSide] = c4RelationSides(rel, from, to)
     const start = anchorOnBox(from, fromSide)
     const end = anchorOnBox(to, toSide)
+    start.x += sourcePortOffset.x || 0
+    start.y += sourcePortOffset.y || 0
+    end.x += targetPortOffset.x || 0
+    end.y += targetPortOffset.y || 0
     if ((fromSide === 'bottom' || fromSide === 'top') && (toSide === 'bottom' || toSide === 'top')) {
       if (start.x >= to.x + 28 && start.x <= to.x + to.w - 28) end.x = start.x
       else if (end.x >= from.x + 28 && end.x <= from.x + from.w - 28) start.x = end.x
@@ -1424,11 +1446,12 @@
       const simplified = simplifyPolyline(points)
       if (allowedRegion && simplified.some((point) => point.x < allowedRegion.left - 0.1 || point.x > allowedRegion.right + 0.1 || point.y < allowedRegion.top - 0.1 || point.y > allowedRegion.bottom + 0.1)) return
       const obstaclePenalty = obstacles.some((rectValue) => c4PolylineIntersectsRect(simplified, rectValue)) ? 100000 : 0
-      const occupiedPenalty = c4PolylineOverlapsSegments(simplified, occupiedSegments) ? 25000 : 0
+      const occupiedPenalty = c4PolylineOverlapsSegments(simplified, occupiedSegments) ? 90000 : 0
+      const crossingPenalty = c4PolylineCrossesSegments(simplified, occupiedSegments) ? 42000 : 0
       const labelPenalty = displayLabel ? Math.max(0, 180 - Math.max(...c4SegmentsFromRoute(simplified).map((seg) => Math.abs(seg.end - seg.start)), 0)) : 0
       candidates.push({
         points: simplified,
-        score: baseScore + c4PolylineLength(simplified) + c4BendCount(simplified) * 28 + obstaclePenalty + occupiedPenalty + labelPenalty,
+        score: baseScore + c4PolylineLength(simplified) + c4BendCount(simplified) * 28 + obstaclePenalty + occupiedPenalty + crossingPenalty + labelPenalty,
       })
     }
 
@@ -1437,6 +1460,8 @@
       const endDir = toSide === 'top' ? -1 : 1
       const baseStartY = start.y + dir * 34
       const baseEndY = end.y + endDir * 34
+      const startTurnYs = [baseStartY, baseStartY + dir * 18, baseStartY + dir * 36, baseStartY - dir * 18]
+      const endTurnYs = [baseEndY, baseEndY + endDir * 18, baseEndY + endDir * 36, baseEndY - endDir * 18]
       const axisCandidates = [
         start.x,
         end.x,
@@ -1452,14 +1477,27 @@
       occupiedSegments.filter((seg) => seg.orientation === 'vertical').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
       })
+      occupiedSegments.filter((seg) => seg.orientation === 'horizontal').forEach((seg) => {
+        axisCandidates.push(seg.start - 18, seg.end + 18)
+      })
       ;[...new Set(axisCandidates.map((value) => Math.round(value * 10) / 10))]
         .filter((axis) => !allowedRegion || (axis >= allowedRegion.left && axis <= allowedRegion.right))
-        .forEach((axis) => pushCandidate(routeViaVerticalAxis(start, end, axis, baseStartY, baseEndY), Math.abs(axis - end.x) * 0.4))
+        .forEach((axis) => {
+          ;[...new Set(startTurnYs.map((value) => Math.round(value * 10) / 10))]
+            .filter((turnY) => !allowedRegion || (turnY >= allowedRegion.top && turnY <= allowedRegion.bottom))
+            .forEach((startTurnY) => {
+              ;[...new Set(endTurnYs.map((value) => Math.round(value * 10) / 10))]
+                .filter((turnY) => !allowedRegion || (turnY >= allowedRegion.top && turnY <= allowedRegion.bottom))
+                .forEach((endTurnY) => pushCandidate(routeViaVerticalAxis(start, end, axis, startTurnY, endTurnY), Math.abs(axis - end.x) * 0.4 + Math.abs(startTurnY - baseStartY) * 1.2 + Math.abs(endTurnY - baseEndY) * 0.8))
+            })
+        })
     } else {
       const dir = fromSide === 'right' ? 1 : -1
       const endDir = toSide === 'left' ? -1 : 1
       const baseStartX = start.x + dir * 34
       const baseEndX = end.x + endDir * 34
+      const startTurnXs = [baseStartX, baseStartX + dir * 18, baseStartX + dir * 36, baseStartX - dir * 18]
+      const endTurnXs = [baseEndX, baseEndX + endDir * 18, baseEndX + endDir * 36, baseEndX - endDir * 18]
       const axisCandidates = [
         start.y,
         end.y,
@@ -1475,9 +1513,20 @@
       occupiedSegments.filter((seg) => seg.orientation === 'horizontal').forEach((seg) => {
         axisCandidates.push(seg.axis - 18, seg.axis + 18)
       })
+      occupiedSegments.filter((seg) => seg.orientation === 'vertical').forEach((seg) => {
+        axisCandidates.push(seg.start - 18, seg.end + 18)
+      })
       ;[...new Set(axisCandidates.map((value) => Math.round(value * 10) / 10))]
         .filter((axis) => !allowedRegion || (axis >= allowedRegion.top && axis <= allowedRegion.bottom))
-        .forEach((axis) => pushCandidate(routeViaHorizontalAxis(start, end, axis, baseStartX, baseEndX), Math.abs(axis - end.y) * 0.4))
+        .forEach((axis) => {
+          ;[...new Set(startTurnXs.map((value) => Math.round(value * 10) / 10))]
+            .filter((turnX) => !allowedRegion || (turnX >= allowedRegion.left && turnX <= allowedRegion.right))
+            .forEach((startTurnX) => {
+              ;[...new Set(endTurnXs.map((value) => Math.round(value * 10) / 10))]
+                .filter((turnX) => !allowedRegion || (turnX >= allowedRegion.left && turnX <= allowedRegion.right))
+                .forEach((endTurnX) => pushCandidate(routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX), Math.abs(axis - end.y) * 0.4 + Math.abs(startTurnX - baseStartX) * 1.2 + Math.abs(endTurnX - baseEndX) * 0.8))
+            })
+        })
     }
 
     pushCandidate([start, startStub, fromSide === 'left' || fromSide === 'right' ? { x: endStub.x, y: startStub.y } : { x: startStub.x, y: endStub.y }, endStub, end], 80)
@@ -3374,46 +3423,54 @@
     })
     const sourcePortOffsets = new Map()
     const targetPortOffsets = new Map()
+    const portOffsetValue = (map, relationIndex) => map.get(relationIndex) || { x: 0, y: 0 }
+    const setPortOffset = (map, relationIndex, axis, value) => {
+      const current = portOffsetValue(map, relationIndex)
+      map.set(relationIndex, { ...current, [axis]: value })
+    }
     const fanoutGroups = new Map()
     const faninGroups = new Map()
     model.relations.forEach((rel, relationIndex) => {
-      if (rel.direction !== 'down' && rel.direction !== 'up') return
+      if (!['down', 'up', 'right', 'left'].includes(rel.direction)) return
       const from = scene.layouts.get(rel.from)
       const to = scene.layouts.get(rel.to)
       if (!from || !to) return
+      const horizontal = rel.direction === 'right' || rel.direction === 'left'
       const fanoutKey = `${rel.from}:${rel.direction}`
       if (!fanoutGroups.has(fanoutKey)) fanoutGroups.set(fanoutKey, [])
       fanoutGroups.get(fanoutKey).push({
         relationIndex,
-        targetCenterX: to.x + to.w / 2,
-        sourceWidth: from.w,
+        targetCenter: horizontal ? to.y + to.h / 2 : to.x + to.w / 2,
+        sourceSpan: horizontal ? from.h : from.w,
+        axis: horizontal ? 'y' : 'x',
       })
       const faninKey = `${rel.to}:${rel.direction}`
       if (!faninGroups.has(faninKey)) faninGroups.set(faninKey, [])
       faninGroups.get(faninKey).push({
         relationIndex,
-        sourceCenterX: from.x + from.w / 2,
-        targetWidth: to.w,
+        sourceCenter: horizontal ? from.y + from.h / 2 : from.x + from.w / 2,
+        targetSpan: horizontal ? to.h : to.w,
+        axis: horizontal ? 'y' : 'x',
       })
     })
     fanoutGroups.forEach((items) => {
       if (items.length < 2) return
-      items.sort((left, right) => left.targetCenterX - right.targetCenterX || left.relationIndex - right.relationIndex)
-      const pitch = Math.max(12, Math.min(24, 72 / Math.max(1, items.length - 1)))
-      const maxOffset = Math.max(0, items[0].sourceWidth / 2 - 28)
+      items.sort((left, right) => left.targetCenter - right.targetCenter || left.relationIndex - right.relationIndex)
+      const pitch = Math.max(36, Math.min(42, 96 / Math.max(1, items.length - 1)))
+      const maxOffset = Math.max(0, items[0].sourceSpan / 2 - 28)
       const center = (items.length - 1) / 2
       items.forEach((item, index) => {
-        sourcePortOffsets.set(item.relationIndex, Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch)))
+        setPortOffset(sourcePortOffsets, item.relationIndex, item.axis, Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch)))
       })
     })
     faninGroups.forEach((items) => {
-      if (items.length < 3) return
-      items.sort((left, right) => left.sourceCenterX - right.sourceCenterX || left.relationIndex - right.relationIndex)
-      const pitch = Math.max(12, Math.min(24, 72 / Math.max(1, items.length - 1)))
-      const maxOffset = Math.max(0, items[0].targetWidth / 2 - 28)
+      if (items.length < 2) return
+      items.sort((left, right) => left.sourceCenter - right.sourceCenter || left.relationIndex - right.relationIndex)
+      const pitch = Math.max(36, Math.min(42, 96 / Math.max(1, items.length - 1)))
+      const maxOffset = Math.max(0, items[0].targetSpan / 2 - 28)
       const center = (items.length - 1) / 2
       items.forEach((item, index) => {
-        targetPortOffsets.set(item.relationIndex, Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch)))
+        setPortOffset(targetPortOffsets, item.relationIndex, item.axis, Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch)))
       })
     })
     const orderedIndices = model.relations
@@ -3425,11 +3482,9 @@
       const to = scene.layouts.get(rel.to)
       const item = workItems[relationIndex]
       const obstacles = c4RelationObstacles(rel, relationIndex, model, scene)
-      const fromOffset = sourcePortOffsets.get(relationIndex) || 0
-      const toOffset = targetPortOffsets.get(relationIndex) || 0
-      const routedFrom = from && fromOffset ? { ...from, x: from.x + fromOffset } : from
-      const routedTo = to && toOffset ? { ...to, x: to.x + toOffset } : to
-      const route = routedFrom && routedTo ? routeC4Relation(rel, routedFrom, routedTo, occupiedSegments, obstacles, item.allowedRegion, item.displayLabel) : null
+      const fromOffset = portOffsetValue(sourcePortOffsets, relationIndex)
+      const toOffset = portOffsetValue(targetPortOffsets, relationIndex)
+      const route = from && to ? routeC4Relation(rel, from, to, occupiedSegments, obstacles, item.allowedRegion, item.displayLabel, fromOffset, toOffset) : null
       if (!route || !item) return
       item.route = { points: route, preferredLabelSegment: null }
       item.pathLength = c4PathLength(route)
@@ -3523,6 +3578,28 @@
       }
       if (item.pathLength > item.manhattanSpan + 260) {
         issues.push({ kind: 'DetourTooLarge', relationIndex: item.relationIndex, owner })
+      }
+      const itemSegments = c4SegmentsFromRoute(item.route.points)
+      for (const occupied of validation.occupiedSegments) {
+        if (occupied.ownerRelationIndex === item.relationIndex) continue
+        for (const segment of itemSegments) {
+          if (segment.orientation === occupied.segment.orientation) {
+            if (Math.abs(segment.axis - occupied.segment.axis) <= 0.1 && Math.max(segment.start, occupied.segment.start) < Math.min(segment.end, occupied.segment.end) - 0.1) {
+              issues.push({ kind: 'RouteOverlapsForeignRoute', relationIndex: item.relationIndex, owner: String(occupied.ownerRelationIndex) })
+            }
+          } else {
+            const vertical = segment.orientation === 'vertical' ? segment : occupied.segment
+            const horizontal = segment.orientation === 'horizontal' ? segment : occupied.segment
+            if (
+              vertical.axis > horizontal.start + 0.1 &&
+              vertical.axis < horizontal.end - 0.1 &&
+              horizontal.axis > vertical.start + 0.1 &&
+              horizontal.axis < vertical.end - 0.1
+            ) {
+              issues.push({ kind: 'RouteCrossesForeignRoute', relationIndex: item.relationIndex, owner: String(occupied.ownerRelationIndex) })
+            }
+          }
+        }
       }
       if (!item.labelPlacement) continue
       const labelRect = item.labelPlacement.rect
@@ -5681,11 +5758,11 @@
     return layouts.get(parent) || layouts.get(endpoint.id)
   }
 
-  function architectureRoute(start, startSide, end, endSide) {
+  function architectureRouteFallback(start, startSide, end, endSide, stub = 24) {
     const vector = (side) => side === 'top' ? { x: 0, y: -1 } : side === 'bottom' ? { x: 0, y: 1 } : side === 'left' ? { x: -1, y: 0 } : { x: 1, y: 0 }
     const sv = vector(startSide), ev = vector(endSide)
-    const startStub = { x: start.x + sv.x * 24, y: start.y + sv.y * 24 }
-    const endStub = { x: end.x + ev.x * 24, y: end.y + ev.y * 24 }
+    const startStub = { x: start.x + sv.x * stub, y: start.y + sv.y * stub }
+    const endStub = { x: end.x + ev.x * stub, y: end.y + ev.y * stub }
     const points = [start, startStub]
     const startHorizontal = sv.x !== 0
     const endHorizontal = ev.x !== 0
@@ -5701,6 +5778,67 @@
     else points.push({ x: startStub.x, y: endStub.y })
     points.push(endStub, end)
     return points.filter((point, index, items) => !index || Math.abs(point.x - items[index - 1].x) > 0.1 || Math.abs(point.y - items[index - 1].y) > 0.1)
+  }
+
+  function architectureRoute(start, startSide, end, endSide, occupiedSegments = [], obstacles = [], width = 0, height = 0) {
+    const stub = 24
+    const candidates = []
+    const scoreRoute = (points, baseScore = 0) => {
+      const simplified = simplifyPolyline(points)
+      const obstaclePenalty = obstacles.some((rectValue) => c4PolylineIntersectsRect(simplified, rectValue)) ? 100000 : 0
+      const occupiedPenalty = c4PolylineOverlapsSegments(simplified, occupiedSegments) ? 25000 : 0
+      const canvasPenalty = simplified.some((point) => point.x < 0 || point.y < 0 || (width && point.x > width) || (height && point.y > height)) ? 50000 : 0
+      candidates.push({
+        points: simplified,
+        score: baseScore + c4PolylineLength(simplified) + c4BendCount(simplified) * 28 + obstaclePenalty + occupiedPenalty + canvasPenalty,
+      })
+    }
+    const verticalStart = startSide === 'top' || startSide === 'bottom'
+    if (verticalStart) {
+      const startDir = startSide === 'bottom' ? 1 : -1
+      const endDir = endSide === 'top' ? -1 : endSide === 'bottom' ? 1 : 0
+      const startTurnY = start.y + startDir * stub
+      const endTurnY = end.y + endDir * stub
+      const axes = [start.x, end.x, (start.x + end.x) / 2, Math.min(start.x, end.x) - 48, Math.max(start.x, end.x) + 48]
+      obstacles.forEach((rectValue) => axes.push(rectValue.left - 16, rectValue.right + 16))
+      occupiedSegments.filter((segment) => segment.orientation === 'vertical').forEach((segment) => axes.push(segment.axis - 18, segment.axis + 18))
+      ;[...new Set(axes.map((value) => Math.round(value * 10) / 10))]
+        .filter((axis) => axis >= 12 && (!width || axis <= width - 12))
+        .forEach((axis) => scoreRoute(routeViaVerticalAxis(start, end, axis, startTurnY, endTurnY), Math.abs(axis - end.x) * 0.4))
+    } else {
+      const startDir = startSide === 'right' ? 1 : -1
+      const endDir = endSide === 'left' ? -1 : endSide === 'right' ? 1 : 0
+      const startTurnX = start.x + startDir * stub
+      const endTurnX = end.x + endDir * stub
+      const axes = [start.y, end.y, (start.y + end.y) / 2, Math.min(start.y, end.y) - 48, Math.max(start.y, end.y) + 48]
+      obstacles.forEach((rectValue) => axes.push(rectValue.top - 16, rectValue.bottom + 16))
+      occupiedSegments.filter((segment) => segment.orientation === 'horizontal').forEach((segment) => axes.push(segment.axis - 18, segment.axis + 18))
+      ;[...new Set(axes.map((value) => Math.round(value * 10) / 10))]
+        .filter((axis) => axis >= 12 && (!height || axis <= height - 12))
+        .forEach((axis) => scoreRoute(routeViaHorizontalAxis(start, end, axis, startTurnX, endTurnX), Math.abs(axis - end.y) * 0.4))
+    }
+    scoreRoute(architectureRouteFallback(start, startSide, end, endSide, stub), 80)
+    candidates.sort((a, b) => a.score - b.score || c4PolylineLength(a.points) - c4PolylineLength(b.points))
+    return candidates[0]?.points || architectureRouteFallback(start, startSide, end, endSide, stub)
+  }
+
+  function architectureEdgeObstacles(edge, model, layouts) {
+    const sourceNode = model.nodes.get(edge.from.id)
+    const targetNode = model.nodes.get(edge.to.id)
+    const sourceParent = edge.from.useParentGroup && sourceNode && sourceNode.parent ? sourceNode.parent : edge.from.id
+    const targetParent = edge.to.useParentGroup && targetNode && targetNode.parent ? targetNode.parent : edge.to.id
+    const excluded = new Set([sourceParent, targetParent, edge.from.id, edge.to.id])
+    const obstacles = []
+    layouts.forEach((box, id) => {
+      const node = model.nodes.get(id)
+      if (!node || excluded.has(id)) return
+      if (node.type === 'group') {
+        obstacles.push({ left: box.x, top: box.y, right: box.x + box.w, bottom: box.y + 58 })
+      } else {
+        obstacles.push(c4InflateRect(c4RectFromBox(box), 10))
+      }
+    })
+    return obstacles
   }
 
   function renderArchitectureNode(id, model, layouts) {
@@ -5737,13 +5875,15 @@
       x += rootSizes[index].w + 92
     })
     const nodeLayer = model.roots.map((id) => renderArchitectureNode(id, model, layouts)).join('')
+    const occupiedSegments = []
     const edgeLayer = model.edges.map((edge) => {
       const aBox = architectureEndpointBox(edge.from, model, layouts)
       const bBox = architectureEndpointBox(edge.to, model, layouts)
       if (!aBox || !bBox) return ''
       const start = architectureAnchor(aBox, edge.from.side)
       const end = architectureAnchor(bBox, edge.to.side)
-      const route = architectureRoute(start, edge.from.side, end, edge.to.side)
+      const route = architectureRoute(start, edge.from.side, end, edge.to.side, occupiedSegments, architectureEdgeObstacles(edge, model, layouts), width, height)
+      c4SegmentsFromRoute(route).forEach((segment) => occupiedSegments.push(segment))
       return `<g data-architecture-edge="${attr(`${edge.from.id}:${edge.from.sideCode}->${edge.to.id}:${edge.to.sideCode}`)}">${rustPolylineArrowheads(route, t.link, false, edge.startArrow, edge.endArrow, 2)}</g>`
     }).join('')
     return rustSvgWithTitle(width, height, 'Architecture', `${nodeLayer}${edgeLayer}`, 'Architecture')

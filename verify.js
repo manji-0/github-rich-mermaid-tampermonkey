@@ -1931,6 +1931,9 @@ function assertGalleryViewBoxes(renderer, galleryBlocks) {
     if (actual !== expected.viewBox) {
       throw new Error(`gallery #${expected.index} ${type}: viewBox ${actual}, expected ${expected.viewBox}`)
     }
+    if (type === 'architecture-beta') {
+      assertArchitectureRoutesAvoidNodeBodies(renderer.renderMermaidSvg(source), `gallery #${expected.index} architecture-beta`)
+    }
   })
 }
 
@@ -2354,6 +2357,63 @@ function flowchartEdgePaths(svg) {
   return paths
 }
 
+function architectureNodeBodyRects(svg) {
+  const rects = new Map()
+  const pattern = /<g data-architecture-node="([^"]+)" data-architecture-id="([^"]+)">([\s\S]*?)<\/g>/g
+  let match
+  while ((match = pattern.exec(svg))) {
+    const kind = match[1]
+    if (kind !== 'service' && kind !== 'junction') continue
+    const rectTag = match[3].match(/<rect\b[^>]*>/)?.[0]
+    if (rectTag) {
+      const x = Number(svgAttrValue(rectTag, 'x'))
+      const y = Number(svgAttrValue(rectTag, 'y'))
+      const w = Number(svgAttrValue(rectTag, 'width'))
+      const h = Number(svgAttrValue(rectTag, 'height'))
+      if ([x, y, w, h].every(Number.isFinite)) rects.set(match[2], { left: x, top: y, right: x + w, bottom: y + h })
+      continue
+    }
+    const circleTag = match[3].match(/<circle\b[^>]*>/)?.[0]
+    if (circleTag) {
+      const cx = Number(svgAttrValue(circleTag, 'cx'))
+      const cy = Number(svgAttrValue(circleTag, 'cy'))
+      const r = Number(svgAttrValue(circleTag, 'r'))
+      if ([cx, cy, r].every(Number.isFinite)) rects.set(match[2], { left: cx - r, top: cy - r, right: cx + r, bottom: cy + r })
+    }
+  }
+  return rects
+}
+
+function architectureEdgePaths(svg) {
+  const paths = new Map()
+  const pattern = /<g data-architecture-edge="([^"]+)">([\s\S]*?)<\/g>/g
+  let match
+  while ((match = pattern.exec(svg))) {
+    const d = match[2].match(/<path d="([^"]+)"/)?.[1]
+    if (d) paths.set(match[1].replaceAll('&gt;', '>'), parseSvgPathPoints(d))
+  }
+  return paths
+}
+
+function architectureEdgeEndpointIds(edgeId) {
+  const match = edgeId.match(/^([^:]+):[TBLR]->([^:]+):[TBLR]$/)
+  return match ? new Set([match[1], match[2]]) : new Set()
+}
+
+function assertArchitectureRoutesAvoidNodeBodies(svg, label) {
+  const rects = architectureNodeBodyRects(svg)
+  const paths = architectureEdgePaths(svg)
+  for (const [edgeId, points] of paths.entries()) {
+    const endpoints = architectureEdgeEndpointIds(edgeId)
+    for (const [nodeId, rectValue] of rects.entries()) {
+      if (endpoints.has(nodeId)) continue
+      if (segments(points).some((segment) => segmentIntersectsRect(segment, rectValue))) {
+        throw new Error(`${label}: architecture edge ${edgeId} intersects ${nodeId}`)
+      }
+    }
+  }
+}
+
 function flowchartCollinearOverlapCount(paths) {
   const entries = [...paths.entries()]
   let count = 0
@@ -2589,8 +2649,8 @@ function c4Metrics(scene, workItems, validation, issues) {
     totalDetour,
     totalBends: workItems.reduce((sum, item) => sum + (item.route ? bendCount(item.route.points) : 0), 0),
     avgDetour: totalDetour / Math.max(1, workItems.filter((item) => item.route).length),
-    hardIssueCount: issues.filter((issue) => issue.kind !== 'DetourTooLarge' && issue.kind !== 'LabelOverlapsSoftObstacle').length,
-    softIssueCount: issues.filter((issue) => issue.kind === 'DetourTooLarge' || issue.kind === 'LabelOverlapsSoftObstacle').length,
+    hardIssueCount: issues.filter((issue) => !['DetourTooLarge', 'LabelOverlapsSoftObstacle', 'RouteCrossesForeignRoute'].includes(issue.kind)).length,
+    softIssueCount: issues.filter((issue) => ['DetourTooLarge', 'LabelOverlapsSoftObstacle', 'RouteCrossesForeignRoute'].includes(issue.kind)).length,
     labelLaneReservations: validation.labelLaneReservations.length,
     crossingLaneReservations: validation.crossingLaneReservations.length,
     canvasWasteRatio: canvasArea > 0 ? Math.max(0, canvasArea - contentArea) / canvasArea : 0,
@@ -2732,10 +2792,12 @@ function main() {
       }
       const blockingIssues = type === 'C4Component'
         ? issues
-        : issues.filter((issue) => issue.kind !== 'DetourTooLarge' && issue.kind !== 'LabelOverlapsSoftObstacle')
+        : issues.filter((issue) => !['DetourTooLarge', 'LabelOverlapsSoftObstacle', 'RouteCrossesForeignRoute'].includes(issue.kind))
       if (blockingIssues.length) {
         throw new Error(`C4 validation issues in ${type} ${source.split('\n').slice(0, 2).join(' / ')}: ${issues.map((issue) => issue.kind).join(', ')}`)
       }
+      assertRoutesAvoidNodeBodies(model, scene, workItems)
+      assertNoCollinearRouteOverlap(workItems)
       assertC4Quality(type, c4Metrics(scene, workItems, validation, issues), workItems.length)
     }
   }
