@@ -152,6 +152,7 @@ const c4RustComplexScenarios = [
       const fanoutHome = workItemFor(workItems, 'fanout', 'homecache')
       const timelineGraph = workItemFor(workItems, 'timeline', 'graph')
       const fanoutGraph = workItemFor(workItems, 'fanout', 'graph')
+      const mediaBlob = workItemFor(workItems, 'media', 'blob')
       const apiHomeEnd = apiHome.route.points.at(-1)
       const fanoutHomeEnd = fanoutHome.route.points.at(-1)
       const timelineGraphEnd = timelineGraph.route.points.at(-1)
@@ -161,6 +162,12 @@ const c4RustComplexScenarios = [
       }
       if (!(fanoutGraphEnd.y < timelineGraphEnd.y - 16)) {
         throw new Error(`twitter graph fan-in ports out of order: fanout=${fanoutGraphEnd.y.toFixed(1)} timeline=${timelineGraphEnd.y.toFixed(1)}`)
+      }
+      if (timelineGraph.route.points.length > 2) {
+        throw new Error(`twitter timeline->graph should stay direct: ${JSON.stringify(timelineGraph.route.points)}`)
+      }
+      if (mediaBlob.route.points.length > 2) {
+        throw new Error(`twitter media->blob should stay direct: ${JSON.stringify(mediaBlob.route.points)}`)
       }
       const totalCrossings = c4RouteCrossingCount(workItems)
       if (totalCrossings > 1) throw new Error(`twitter feed routes still have avoidable crossings: ${totalCrossings}`)

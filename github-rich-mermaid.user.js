@@ -1437,8 +1437,9 @@
       const hasSourcePortOffset = Math.abs(sourcePortOffset.x || 0) > 0.1
       const hasTargetPortOffset = Math.abs(targetPortOffset.x || 0) > 0.1
       const preserveTargetPortOffset = !!routeHints.preserveTargetPortOffset
-      if ((!hasTargetPortOffset || !preserveTargetPortOffset) && start.x >= to.x + 28 && start.x <= to.x + to.w - 28) end.x = start.x
-      else if (!hasSourcePortOffset && (!hasTargetPortOffset || !preserveTargetPortOffset) && end.x >= from.x + 28 && end.x <= from.x + from.w - 28) start.x = end.x
+      const straightAlignInset = 20
+      if ((!hasTargetPortOffset || !preserveTargetPortOffset) && start.x >= to.x + straightAlignInset && start.x <= to.x + to.w - straightAlignInset) end.x = start.x
+      else if (!hasSourcePortOffset && (!hasTargetPortOffset || !preserveTargetPortOffset) && end.x >= from.x + straightAlignInset && end.x <= from.x + from.w - straightAlignInset) start.x = end.x
     }
     const sv = sideVector(fromSide)
     const ev = sideVector(toSide)
@@ -3551,8 +3552,17 @@
       const pitch = Math.max(36, Math.min(42, 96 / Math.max(1, items.length - 1)))
       const maxOffset = Math.max(0, items[0].targetSpan / 2 - 28)
       const center = (items.length - 1) / 2
+      const alignedHorizontalFanin = items[0].axis === 'y' && items.every((item) => Math.abs(item.sourceCenter - items[0].sourceCenter) <= 0.5)
+      const preferredCenterIndex = alignedHorizontalFanin
+        ? items.reduce((bestIndex, item, index) => {
+            const best = items[bestIndex]
+            if (item.direction === 'left') return item.sourceTieBreak < best.sourceTieBreak ? index : bestIndex
+            return item.sourceTieBreak > best.sourceTieBreak ? index : bestIndex
+          }, 0)
+        : null
       items.forEach((item, index) => {
-        const offset = Math.max(-maxOffset, Math.min(maxOffset, (index - center) * pitch))
+        const rawOffset = alignedHorizontalFanin ? (index - preferredCenterIndex) * pitch : (index - center) * pitch
+        const offset = Math.max(-maxOffset, Math.min(maxOffset, rawOffset))
         setPortOffset(targetPortOffsets, item.relationIndex, item.axis, offset)
         const sourceFanout = fanoutGroups.get(`${item.fromId}:${item.direction}`)
         if (item.axis === 'x' && Math.abs(offset) > 0.1 && sourceFanout && sourceFanout.length > 1) {
