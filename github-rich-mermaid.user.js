@@ -1734,12 +1734,13 @@
     }
   }
 
-  function c4LabelPlacementFromRect(rectValue, label, centered = false, alignEnd = false, lines = null) {
+  function c4LabelPlacementFromRect(rectValue, label, centered = false, alignEnd = false, lines = null, textRect = null) {
     return {
       rect: rectValue,
+      textRect: textRect || rectValue,
       centered,
       alignEnd,
-      lines: lines || c4LabelSize(label, Math.max(72, rectValue.right - rectValue.left)).lines,
+      lines: lines || c4LabelSize(label, Math.max(72, (textRect || rectValue).right - (textRect || rectValue).left)).lines,
     }
   }
 
@@ -1828,17 +1829,27 @@
             const offsetPenalty = nearGap + farGap * 0.15
             const sidePlacements = [
               c4LabelPlacementFromRect({
+                left: seg.a.x,
+                top: centerY - size.height / 2,
+                right: seg.a.x + farGap + size.width,
+                bottom: centerY + size.height / 2,
+              }, label, false, false, size.lines, {
                 left: seg.a.x + nearGap,
                 top: centerY - size.height / 2,
                 right: seg.a.x + farGap + size.width,
                 bottom: centerY + size.height / 2,
-              }, label, false, false, size.lines),
+              }),
               c4LabelPlacementFromRect({
+                left: seg.a.x - size.width - farGap,
+                top: centerY - size.height / 2,
+                right: seg.a.x,
+                bottom: centerY + size.height / 2,
+              }, label, false, true, size.lines, {
                 left: seg.a.x - size.width - farGap,
                 top: centerY - size.height / 2,
                 right: seg.a.x - nearGap,
                 bottom: centerY + size.height / 2,
-              }, label, false, true, size.lines),
+              }),
             ]
             sidePlacements.forEach((placement, sideIndex) => {
               if (allowedRegion && !c4RectInside(placement.rect, allowedRegion)) return
@@ -1893,12 +1904,15 @@
       const centerY = minY + (maxY - minY) * ratio
       for (const [nearGap, farGap] of [[12, 20], [24, 32], [36, 44], [48, 58], [62, 76], [78, 94]]) {
         const rectValue = alignEnd
+          ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x, bottom: centerY + size.height / 2 + 6 }
+          : { left: segment.a.x, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
+        const textRect = alignEnd
           ? { left: segment.a.x - size.width - farGap, top: centerY - size.height / 2 - 6, right: segment.a.x - nearGap, bottom: centerY + size.height / 2 + 6 }
           : { left: segment.a.x + nearGap, top: centerY - size.height / 2 - 6, right: segment.a.x + farGap + size.width, bottom: centerY + size.height / 2 + 6 }
         if (!c4RectInside(rectValue, item.allowedRegion)) continue
         if (occupiedRects.some((occupied) => c4RectsIntersect(rectValue, occupied))) continue
         if (!c4LabelHasRouteClearance(c4MinRectClearanceToSegments(rectValue, occupiedSegments))) continue
-        return { placement: { rect: rectValue, centered: false, alignEnd, lines: size.lines }, score: 0, segmentIndex: points.length - 2 }
+        return { placement: { rect: rectValue, textRect, centered: false, alignEnd, lines: size.lines }, score: 0, segmentIndex: points.length - 2 }
       }
     }
     return null
@@ -4027,15 +4041,16 @@
   }
 
   function renderC4RelationLabel(placement, t) {
+    const textRect = placement.textRect || placement.rect
     return placement.lines.map((lineValue, index) => {
-      const y = placement.rect.top + 14 + index * 17
+      const y = textRect.top + 14 + index * 17
       if (placement.centered) {
-        return c4Text((placement.rect.left + placement.rect.right) / 2, y, lineValue, 11, 650, t.muted, 'middle')
+        return c4Text((textRect.left + textRect.right) / 2, y, lineValue, 11, 650, t.muted, 'middle')
       }
       if (placement.alignEnd) {
-        return c4Text(placement.rect.right - 6, y, lineValue, 11, 650, t.muted, 'end')
+        return c4Text(textRect.right - 6, y, lineValue, 11, 650, t.muted, 'end')
       }
-      return c4Text(placement.rect.left + 6, y, lineValue, 11, 650, t.muted)
+      return c4Text(textRect.left + 6, y, lineValue, 11, 650, t.muted)
     }).join('')
   }
 
