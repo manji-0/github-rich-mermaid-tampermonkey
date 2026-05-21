@@ -1329,20 +1329,74 @@
     return simplifyPolyline(points)
   }
 
-  function routeFlowchartEdge(from, to, horizontal, sourceLaneOffset = 0, targetLaneOffset = 0) {
+  function flowchartRoutePenalty(points, obstacles) {
+    let score = c4PathLength(points) + c4BendCount(points) * 12
+    for (const rectValue of obstacles) {
+      if (c4PolylineIntersectsRect(points, rectValue)) score += 100000
+    }
+    return score
+  }
+
+  function flowchartAvoidingBackEdgeRoute(start, end, horizontal, startTurn, endTurn, obstacles = []) {
+    if (!obstacles.length) return null
+    if (horizontal) {
+      const spanLeft = Math.min(startTurn, endTurn)
+      const spanRight = Math.max(startTurn, endTurn)
+      const blockers = obstacles.filter((rectValue) => rectValue.right >= spanLeft && rectValue.left <= spanRight)
+      if (!blockers.length) return null
+      const topLane = Math.min(start.y, end.y, ...blockers.map((rectValue) => rectValue.top)) - 36
+      const bottomLane = Math.max(start.y, end.y, ...blockers.map((rectValue) => rectValue.bottom)) + 36
+      return [topLane, bottomLane]
+        .map((lane) => simplifyPolyline([
+          start,
+          { x: startTurn, y: start.y },
+          { x: startTurn, y: lane },
+          { x: endTurn, y: lane },
+          { x: endTurn, y: end.y },
+          end,
+        ]))
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles) - flowchartRoutePenalty(right, obstacles) || c4PathLength(left) - c4PathLength(right))[0]
+    }
+    const spanTop = Math.min(startTurn, endTurn)
+    const spanBottom = Math.max(startTurn, endTurn)
+    const blockers = obstacles.filter((rectValue) => rectValue.bottom >= spanTop && rectValue.top <= spanBottom)
+    if (!blockers.length) return null
+    const leftLane = Math.min(start.x, end.x, ...blockers.map((rectValue) => rectValue.left)) - 36
+    const rightLane = Math.max(start.x, end.x, ...blockers.map((rectValue) => rectValue.right)) + 36
+    return [leftLane, rightLane]
+      .map((lane) => simplifyPolyline([
+        start,
+        { x: start.x, y: startTurn },
+        { x: lane, y: startTurn },
+        { x: lane, y: endTurn },
+        { x: end.x, y: endTurn },
+        end,
+      ]))
+      .sort((left, right) => flowchartRoutePenalty(left, obstacles) - flowchartRoutePenalty(right, obstacles) || c4PathLength(left) - c4PathLength(right))[0]
+  }
+
+  function routeFlowchartEdge(from, to, horizontal, sourceLaneOffset = 0, targetLaneOffset = 0, options = {}) {
     const [fromSide, toSide] = from.flowSides || flowchartSideForBoxes(from, to, horizontal ? 'LR' : 'TD')
     const start = anchorOnBox(from, fromSide)
     const end = anchorOnBox(to, toSide)
+    const obstacles = options.obstacles || []
+    const direction = options.direction || (horizontal ? 'LR' : 'TD')
     if (!horizontal && (fromSide === 'bottom' || fromSide === 'top') && (toSide === 'top' || toSide === 'bottom')) {
       const fromDir = fromSide === 'bottom' ? 1 : -1
       const toDir = toSide === 'top' ? -1 : 1
       const effectiveStartLaneOffset = sourceLaneOffset || targetLaneOffset
       const startTurnY = start.y + fromDir * 24 + effectiveStartLaneOffset * 0.25
       const endTurnY = end.y + toDir * 24 + targetLaneOffset * 0.5
-      if (Math.abs(startTurnY - endTurnY) < 0.1) {
-        return simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+      const direct = Math.abs(startTurnY - endTurnY) < 0.1
+        ? simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+        : simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+      const backEdge = direction === 'BT'
+        ? fromSide === 'bottom' && toSide === 'top' && start.y < end.y
+        : fromSide === 'top' && toSide === 'bottom' && start.y > end.y
+      if (backEdge && obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+        return flowchartAvoidingBackEdgeRoute(start, end, false, startTurnY, endTurnY, obstacles) || direct
       }
-      return simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+      return direct
     }
     if (horizontal && (fromSide === 'right' || fromSide === 'left') && (toSide === 'left' || toSide === 'right')) {
       const fromDir = fromSide === 'right' ? 1 : -1
@@ -1350,10 +1404,16 @@
       const effectiveStartLaneOffset = sourceLaneOffset || targetLaneOffset
       const startTurnX = start.x + fromDir * 24 + effectiveStartLaneOffset * 0.25
       const endTurnX = end.x + toDir * 24 + targetLaneOffset * 0.5
-      if (Math.abs(startTurnX - endTurnX) < 0.1) {
-        return simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: endTurnX, y: end.y }, end])
+      const direct = Math.abs(startTurnX - endTurnX) < 0.1
+        ? simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: endTurnX, y: end.y }, end])
+        : simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: startTurnX, y: end.y }, { x: endTurnX, y: end.y }, end])
+      const backEdge = direction === 'RL'
+        ? fromSide === 'right' && toSide === 'left' && start.x < end.x
+        : fromSide === 'left' && toSide === 'right' && start.x > end.x
+      if (backEdge && obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+        return flowchartAvoidingBackEdgeRoute(start, end, true, startTurnX, endTurnX, obstacles) || direct
       }
-      return simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: startTurnX, y: end.y }, { x: endTurnX, y: end.y }, end])
+      return direct
     }
     return routeOrthogonal(from, to, [], 24)
   }
@@ -2451,8 +2511,6 @@
         p.y += dy
       })
     }
-    const width = Math.max(300, rootGrid.width + padX * 2)
-    const height = Math.max(200, rootGrid.height + padY * 2)
     const sourcePortOffsets = new Map()
     const targetPortOffsets = new Map()
     const sourceGroups = new Map()
@@ -2504,27 +2562,145 @@
     }
     assignFlowchartOffsets(sourceGroups, sourcePortOffsets)
     assignFlowchartOffsets(targetGroups, targetPortOffsets)
-    const edgeMarkup = edges.map((edge) => {
+    const flowchartObstaclesForEdge = (edge) => [...positions.entries()]
+      .filter(([id]) => id !== edge.from && id !== edge.to && !subgraphs.has(id))
+      .map(([, box]) => c4InflateRect(c4RectFromBox(box), 6))
+    const routeRecords = edges.map((edge, edgeIndex) => {
       const a = positions.get(edge.from)
       const b = positions.get(edge.to)
-      if (!a || !b) return ''
-      const edgeIndex = edges.indexOf(edge)
+      if (!a || !b) return null
       const fromOffset = sourcePortOffsets.get(edgeIndex) || 0
       const toOffset = targetPortOffsets.get(edgeIndex) || 0
       const sides = edgeSides[edgeIndex] || flowchartSideForBoxes(a, b, direction)
       const shiftBoxForSide = (box, side, offset) => side === 'top' || side === 'bottom' ? { ...box, x: box.x + offset } : { ...box, y: box.y + offset }
       const routedA = { ...shiftBoxForSide(a, sides[0], fromOffset), flowSides: sides }
       const routedB = shiftBoxForSide(b, sides[1], toOffset)
-      const route = routeFlowchartEdge(routedA, routedB, horizontal, fromOffset, toOffset)
-      const mid = route[Math.floor(route.length / 2)]
-      const labelMarkup = edge.label
-        ? (() => {
-            const labelW = c4EstimateTextWidth(edge.label, 11, 500) + 10
-            const labelH = 18
-            const labelY = mid.y - labelH - 14
-            return `${rect(mid.x - labelW / 2, labelY, labelW, labelH, 4, t.surface, t.border)}${text(mid.x, labelY + labelH / 2, edge.label, 11, 500, t.muted)}`
-        })()
-        : ''
+      const route = routeFlowchartEdge(routedA, routedB, horizontal, fromOffset, toOffset, {
+        direction,
+        obstacles: flowchartObstaclesForEdge(edge),
+      })
+      return { edge, edgeIndex, route, labelPlacement: null }
+    }).filter(Boolean)
+    const flowchartLabelForbiddenRects = [...positions.entries()]
+      .filter(([id]) => !subgraphs.has(id) && nodes.has(id))
+      .map(([, box]) => c4InflateRect(c4RectFromBox(box), 5))
+    const routeSegments = routeRecords.flatMap((record) => (
+      c4SegmentsFromRoute(record.route).map((segmentValue) => ({ edgeIndex: record.edgeIndex, segment: segmentValue }))
+    ))
+    const occupiedLabelRects = []
+    const fallbackFlowchartLabelPlacement = (route, label) => {
+      const segments = []
+      for (let index = 0; index < route.length - 1; index += 1) {
+        const a = route[index]
+        const b = route[index + 1]
+        const length = Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+        if (length >= 1) segments.push({ a, b, length })
+      }
+      segments.sort((left, right) => right.length - left.length)
+      const seg = segments[0]
+      if (!seg) return c4LabelPlacementFromCenter(route[0] || { x: 0, y: 0 }, label)
+      const horizontalSegment = Math.abs(seg.a.y - seg.b.y) < 0.1
+      const center = {
+        x: (seg.a.x + seg.b.x) / 2,
+        y: (seg.a.y + seg.b.y) / 2,
+      }
+      return c4LabelPlacementFromCenter({
+        x: center.x + (horizontalSegment ? 0 : 58),
+        y: center.y + (horizontalSegment ? -24 : 0),
+      }, label)
+    }
+    const normalizeFlowchartLabelPlacement = (placement) => {
+      const lines = placement.lines && placement.lines.length ? placement.lines : ['']
+      const baseTextRect = placement.textRect || placement.rect
+      const targetWidth = Math.max(...lines.map((lineValue) => c4EstimateTextWidth(lineValue, 11, 500))) + 10
+      const targetHeight = lines.length * 18
+      const centerY = (baseTextRect.top + baseTextRect.bottom) / 2
+      let left
+      let right
+      if (placement.centered) {
+        const centerX = (baseTextRect.left + baseTextRect.right) / 2
+        left = centerX - targetWidth / 2
+        right = centerX + targetWidth / 2
+      } else if (placement.alignEnd) {
+        right = baseTextRect.right
+        left = right - targetWidth
+      } else {
+        left = baseTextRect.left
+        right = left + targetWidth
+      }
+      const rectValue = { left, top: centerY - targetHeight / 2, right, bottom: centerY + targetHeight / 2 }
+      return { ...placement, rect: rectValue, textRect: rectValue, lines }
+    }
+    routeRecords.forEach((record) => {
+      if (!record.edge.label) return
+      const otherSegments = routeSegments
+        .filter((entry) => entry.edgeIndex !== record.edgeIndex)
+        .map((entry) => entry.segment)
+      const candidates = c4LabelCandidates(record.route, record.edge.label, null, otherSegments, flowchartLabelForbiddenRects)
+      const candidate = c4SelectLabelCandidate(candidates, occupiedLabelRects)
+        || candidates[0]
+        || fallbackFlowchartLabelPlacement(record.route, record.edge.label)
+      record.labelPlacement = normalizeFlowchartLabelPlacement(candidate.placement || candidate)
+      occupiedLabelRects.push(c4ReservedLaneRectFromLabelRect(record.labelPlacement.rect))
+    })
+    const shiftFlowchartRect = (rectValue, dx, dy) => {
+      rectValue.left += dx
+      rectValue.right += dx
+      rectValue.top += dy
+      rectValue.bottom += dy
+    }
+    const shiftFlowchartContent = (dx, dy) => {
+      if (!dx && !dy) return
+      positions.forEach((box) => {
+        box.x += dx
+        box.y += dy
+      })
+      routeRecords.forEach((record) => {
+        record.route.forEach((point) => {
+          point.x += dx
+          point.y += dy
+        })
+        if (record.labelPlacement) {
+          shiftFlowchartRect(record.labelPlacement.rect, dx, dy)
+          if (record.labelPlacement.textRect && record.labelPlacement.textRect !== record.labelPlacement.rect) {
+            shiftFlowchartRect(record.labelPlacement.textRect, dx, dy)
+          }
+        }
+      })
+    }
+    const flowchartContentBounds = () => {
+      const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }
+      const includeRect = (rectValue) => {
+        bounds.left = Math.min(bounds.left, rectValue.left)
+        bounds.top = Math.min(bounds.top, rectValue.top)
+        bounds.right = Math.max(bounds.right, rectValue.right)
+        bounds.bottom = Math.max(bounds.bottom, rectValue.bottom)
+      }
+      positions.forEach((box) => includeRect(c4RectFromBox(box)))
+      routeRecords.forEach((record) => {
+        record.route.forEach((point) => includeRect({ left: point.x - 10, top: point.y - 10, right: point.x + 10, bottom: point.y + 10 }))
+        if (record.labelPlacement) includeRect(record.labelPlacement.rect)
+      })
+      if (!Number.isFinite(bounds.left)) return { left: 0, top: 0, right: 300, bottom: 200 }
+      return bounds
+    }
+    let contentBounds = flowchartContentBounds()
+    shiftFlowchartContent(Math.max(0, padX - contentBounds.left), Math.max(0, padY - contentBounds.top))
+    contentBounds = flowchartContentBounds()
+    const width = Math.max(300, contentBounds.right + padX)
+    const height = Math.max(200, contentBounds.bottom + padY)
+    const renderFlowchartLabel = (label, placement) => {
+      const rectValue = placement.rect
+      const textRect = placement.textRect || rectValue
+      const lines = placement.lines && placement.lines.length ? placement.lines : [label]
+      const anchor = placement.centered ? 'middle' : placement.alignEnd ? 'end' : 'start'
+      const textX = placement.centered ? (textRect.left + textRect.right) / 2 : placement.alignEnd ? textRect.right : textRect.left
+      const lineGap = 13
+      const firstY = (textRect.top + textRect.bottom) / 2 - ((lines.length - 1) * lineGap) / 2
+      return `${rect(rectValue.left, rectValue.top, rectValue.right - rectValue.left, rectValue.bottom - rectValue.top, 4, t.surface, t.border)}${lines.map((lineValue, index) => text(textX, firstY + index * lineGap, lineValue, 11, 500, t.muted, anchor)).join('')}`
+    }
+    const edgeMarkup = routeRecords.map(({ edge, route, labelPlacement }) => {
+      const labelMarkup = labelPlacement ? renderFlowchartLabel(edge.label, labelPlacement) : ''
       const dashed = edge.style === 'dotted'
       return `<g data-flowchart-edge="${dataAttr(`${edge.from}->${edge.to}`)}">${rustPolylineArrowheads(route, t.link, dashed, edge.startArrow, edge.endArrow, 2)}${labelMarkup}</g>`
     }).join('')

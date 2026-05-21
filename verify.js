@@ -1034,6 +1034,33 @@ const flowchartRustSamples = [
     },
   },
   {
+    name: 'Flowchart TD decision loop avoids clipping and node crossings',
+    source: `flowchart TD
+  A[Parse Mermaid C4 source] --> B[Measure nested nodes and boundaries]
+  B --> C[Build hierarchy-aware grid layout]
+  C --> D[Route relations with orthogonal candidates]
+  D --> E[Place relation labels]
+  E --> F[Validate routes, labels, and scope crossings]
+  F --> G{Quality acceptable?}
+  G -- repairable issues --> H[Relabel or reroute selected relations]
+  H --> F
+  G -- candidate correct --> I[Choose best]
+  I --> J[Emit SVG and validation metadata]`,
+    check({ svg }) {
+      const decisionRect = rectFromBox(flowchartNodeBounds(svg, 'G'))
+      const backRoute = flowchartEdgePaths(svg).get('H->F')
+      if (!backRoute) throw new Error('flowchart decision loop missing H->F route')
+      if (segments(backRoute).some((segment) => segmentIntersectsRect(segment, decisionRect))) {
+        throw new Error('flowchart decision loop back edge crosses decision body')
+      }
+      for (const [edgeId, label] of [['G->H', 'repairable issues'], ['G->I', 'candidate correct']]) {
+        const labelRect = flowchartEdgeLabelRect(svg, edgeId, label)
+        assertRectInside(labelRect, svgViewBoxRect(svg, this.name), `${this.name}: ${edgeId} label clipped`)
+        if (rectsIntersect(labelRect, decisionRect)) throw new Error(`${this.name}: ${edgeId} label overlaps decision body`)
+      }
+    },
+  },
+  {
     name: 'shape elements match node syntax',
     source: `flowchart TD
   A{Decision}
@@ -2039,6 +2066,17 @@ function viewBoxOf(svg, label) {
   return match[1]
 }
 
+function svgViewBoxRect(svg, label) {
+  const [x, y, w, h] = viewBoxOf(svg, label).split(/\s+/).map(Number)
+  return { left: x, top: y, right: x + w, bottom: y + h }
+}
+
+function assertRectInside(rectValue, outer, label) {
+  if (rectValue.left < outer.left - 0.1 || rectValue.right > outer.right + 0.1 || rectValue.top < outer.top - 0.1 || rectValue.bottom > outer.bottom + 0.1) {
+    throw new Error(`${label}: rect ${JSON.stringify(rectValue)} outside ${JSON.stringify(outer)}`)
+  }
+}
+
 function titleOf(source) {
   return source.match(/^\s*title\s+(.+)$/m)?.[1] || ''
 }
@@ -2391,6 +2429,19 @@ function flowchartEdgeGroup(svg, id) {
   const group = svgGroupAt(svg, start)
   if (!group) throw new Error(`unterminated flowchart edge ${id}`)
   return group
+}
+
+function flowchartEdgeLabelRect(svg, id, label) {
+  const group = flowchartEdgeGroup(svg, id)
+  const textIndex = group.indexOf(`>${label}</text>`)
+  if (textIndex < 0) throw new Error(`missing flowchart edge label ${id}: ${label}`)
+  const rectTag = [...group.slice(0, textIndex).matchAll(/<rect\b[^>]*>/g)].at(-1)?.[0]
+  if (!rectTag) throw new Error(`missing flowchart edge label rect ${id}: ${label}`)
+  const x = Number(svgAttrValue(rectTag, 'x'))
+  const y = Number(svgAttrValue(rectTag, 'y'))
+  const w = Number(svgAttrValue(rectTag, 'width'))
+  const h = Number(svgAttrValue(rectTag, 'height'))
+  return { left: x, top: y, right: x + w, bottom: y + h }
 }
 
 function flowchartSubgraphGroup(svg, id) {
@@ -2777,6 +2828,10 @@ function segments(points) {
 
 function rectFromBox(box) {
   return { left: box.x, top: box.y, right: box.x + box.w, bottom: box.y + box.h }
+}
+
+function rectsIntersect(left, right) {
+  return left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top
 }
 
 function segmentIntersectsRect(segment, rect) {
