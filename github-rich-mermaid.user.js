@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Mermaid Rich Renderer
 // @namespace    https://github.com/manji-0/github-mermaid-rich-renderer
-// @version      0.3.3
+// @version      0.3.4
 // @description  Replace GitHub Markdown preview Mermaid diagrams with a Rich-style SVG renderer.
 // @author       manji0
 // @match        https://github.com/*
@@ -20,6 +20,9 @@
   const ERROR_ATTR = 'data-docattice-mermaid-error'
   const SOURCE_ATTR = 'data-docattice-mermaid-source'
   const MAX_PARALLEL_RENDERS = 4
+  const MIN_VIEWER_ZOOM = 0.25
+  const MAX_VIEWER_ZOOM = 4
+  const VIEWER_ZOOM_STEP = 1.2
   const UI_FONT = "'LINE Seed JP','Hiragino Sans','Yu Gothic UI','Segoe UI Variable',system-ui,sans-serif"
 
   const SUPPORTED_TYPES = new Set([
@@ -7411,10 +7414,224 @@
     return null
   }
 
+  function clampNumber(value, min, max) {
+    if (!Number.isFinite(value)) return min
+    return Math.min(max, Math.max(min, value))
+  }
+
+  function parseSvgNumber(value) {
+    const match = String(value || '').match(/^-?\d+(?:\.\d+)?/)
+    return match ? Number(match[0]) : 0
+  }
+
+  function svgIntrinsicSize(svgElement) {
+    const viewBox = String(svgElement.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number)
+    const viewBoxWidth = viewBox.length === 4 && Number.isFinite(viewBox[2]) ? viewBox[2] : 0
+    const viewBoxHeight = viewBox.length === 4 && Number.isFinite(viewBox[3]) ? viewBox[3] : 0
+    const width = parseSvgNumber(svgElement.getAttribute('width')) || viewBoxWidth || 640
+    const height = parseSvgNumber(svgElement.getAttribute('height')) || viewBoxHeight || 360
+    return {
+      width: Math.max(1, width),
+      height: Math.max(1, height),
+    }
+  }
+
+  function mermaidViewerDocumentHtml(svgMarkup) {
+    const t = theme()
+    return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,
+  body {
+    margin: 0;
+    min-height: 100%;
+    background: ${t.bg};
+    color: ${t.text};
+    font-family: ${UI_FONT};
+  }
+  body {
+    overscroll-behavior: contain;
+    overflow: auto;
+  }
+  #docattice-mermaid-viewer-canvas {
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-width: 100%;
+    min-height: 100%;
+    padding: 16px;
+    user-select: none;
+  }
+  #docattice-mermaid-viewer-canvas svg {
+    display: block;
+    flex: 0 0 auto;
+    max-width: none !important;
+  }
+</style>
+</head>
+<body>
+<div id="docattice-mermaid-viewer-canvas">${String(svgMarkup || '')}</div>
+</body>
+</html>`
+  }
+
+  function writeMermaidViewerDocument(iframe, svgMarkup) {
+    const frameDocument = iframe.contentDocument
+    if (!frameDocument) return false
+    frameDocument.open()
+    frameDocument.write(mermaidViewerDocumentHtml(svgMarkup))
+    frameDocument.close()
+    return true
+  }
+
+  function setupMermaidViewer(figure) {
+    if (!figure || figure.getAttribute('data-docattice-viewer-ready') === 'true') return
+    const iframe = figure.querySelector?.('.docattice-github-mermaid__frame')
+    const template = figure.querySelector?.('.docattice-github-mermaid__svg-template')
+    if (!iframe || !template) return
+    figure.setAttribute('data-docattice-viewer-ready', 'true')
+
+    if (!writeMermaidViewerDocument(iframe, template.innerHTML)) {
+      window.setTimeout(() => {
+        figure.removeAttribute('data-docattice-viewer-ready')
+        setupMermaidViewer(figure)
+      }, 0)
+      return
+    }
+
+    const frameWindow = iframe.contentWindow
+    const frameDocument = iframe.contentDocument
+    const svgElement = frameDocument?.querySelector('svg')
+    const canvas = frameDocument?.getElementById('docattice-mermaid-viewer-canvas')
+    if (!frameWindow || !frameDocument || !svgElement || !canvas) return
+
+    const size = svgIntrinsicSize(svgElement)
+    const label = figure.querySelector?.('.docattice-github-mermaid__zoom-label')
+    const buttons = new Map(Array.from(figure.querySelectorAll?.('[data-docattice-viewer-action]') || []).map((button) => [
+      button.getAttribute('data-docattice-viewer-action'),
+      button,
+    ]))
+    let zoom = 1
+    let fitMode = false
+
+    const availableWidth = () => Math.max(1, iframe.clientWidth - 32)
+    const fitZoom = () => clampNumber(availableWidth() / size.width, MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM)
+    const frameMaxHeight = () => Math.min(Math.max(320, window.innerHeight * 0.72), 820)
+    const updateFrameHeight = () => {
+      const target = clampNumber(size.height * zoom + 32, 220, frameMaxHeight())
+      iframe.style.height = `${target.toFixed(0)}px`
+    }
+    const updateButtons = () => {
+      if (label) label.textContent = `${Math.round(zoom * 100)}%`
+      iframe.setAttribute('data-docattice-viewer-zoom', zoom.toFixed(3))
+      const zoomOut = buttons.get('zoom-out')
+      const zoomIn = buttons.get('zoom-in')
+      if (zoomOut) zoomOut.disabled = zoom <= MIN_VIEWER_ZOOM + 0.001
+      if (zoomIn) zoomIn.disabled = zoom >= MAX_VIEWER_ZOOM - 0.001
+    }
+    const applyZoom = (nextZoom, options = {}) => {
+      const previousZoom = zoom
+      const previousX = frameWindow.scrollX
+      const previousY = frameWindow.scrollY
+      zoom = clampNumber(nextZoom, MIN_VIEWER_ZOOM, MAX_VIEWER_ZOOM)
+      svgElement.style.width = `${(size.width * zoom).toFixed(1)}px`
+      svgElement.style.height = `${(size.height * zoom).toFixed(1)}px`
+      updateFrameHeight()
+      updateButtons()
+      canvas.style.cursor = zoom > 1 ? 'grab' : 'default'
+      if (options.preserveScroll && previousZoom > 0) {
+        const ratio = zoom / previousZoom
+        frameWindow.requestAnimationFrame(() => {
+          frameWindow.scrollTo(previousX * ratio, previousY * ratio)
+        })
+      }
+    }
+    const applyInitialZoom = () => {
+      fitMode = true
+      applyZoom(Math.min(1, fitZoom()))
+    }
+
+    figure.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-docattice-viewer-action]')
+      if (!button || !figure.contains(button)) return
+      const action = button.getAttribute('data-docattice-viewer-action')
+      if (action === 'zoom-in') {
+        fitMode = false
+        applyZoom(zoom * VIEWER_ZOOM_STEP, { preserveScroll: true })
+      } else if (action === 'zoom-out') {
+        fitMode = false
+        applyZoom(zoom / VIEWER_ZOOM_STEP, { preserveScroll: true })
+      } else if (action === 'actual-size') {
+        fitMode = false
+        applyZoom(1)
+      } else if (action === 'fit') {
+        fitMode = true
+        applyZoom(fitZoom())
+      }
+    })
+
+    frameDocument.addEventListener('wheel', (event) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      fitMode = false
+      applyZoom(event.deltaY < 0 ? zoom * VIEWER_ZOOM_STEP : zoom / VIEWER_ZOOM_STEP, { preserveScroll: true })
+    }, { passive: false })
+
+    let panStart = null
+    canvas.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return
+      panStart = {
+        x: event.clientX,
+        y: event.clientY,
+        scrollX: frameWindow.scrollX,
+        scrollY: frameWindow.scrollY,
+      }
+      canvas.setPointerCapture?.(event.pointerId)
+      canvas.style.cursor = 'grabbing'
+      event.preventDefault()
+    })
+    canvas.addEventListener('pointermove', (event) => {
+      if (!panStart) return
+      frameWindow.scrollTo(
+        panStart.scrollX - (event.clientX - panStart.x),
+        panStart.scrollY - (event.clientY - panStart.y)
+      )
+    })
+    const endPan = (event) => {
+      if (!panStart) return
+      panStart = null
+      canvas.releasePointerCapture?.(event.pointerId)
+      canvas.style.cursor = zoom > 1 ? 'grab' : 'default'
+    }
+    canvas.addEventListener('pointerup', endPan)
+    canvas.addEventListener('pointercancel', endPan)
+
+    window.addEventListener('resize', () => {
+      if (fitMode) applyZoom(fitZoom())
+      else updateFrameHeight()
+    }, { passive: true })
+
+    applyInitialZoom()
+    canvas.style.cursor = zoom > 1 ? 'grab' : 'default'
+  }
+
   function replacementHtml(source, renderedSvg) {
     return `
       <figure class="docattice-github-mermaid" data-docattice-diagram-type="${attr(detectMermaidDiagramType(source))}">
-        <div class="docattice-github-mermaid__stage">${renderedSvg}</div>
+        <div class="docattice-github-mermaid__stage">
+          <div class="docattice-github-mermaid__toolbar" aria-label="Mermaid view controls">
+            <button type="button" class="docattice-github-mermaid__control" data-docattice-viewer-action="zoom-out" title="Zoom out" aria-label="Zoom out">-</button>
+            <output class="docattice-github-mermaid__zoom-label" aria-live="polite">100%</output>
+            <button type="button" class="docattice-github-mermaid__control" data-docattice-viewer-action="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" class="docattice-github-mermaid__control docattice-github-mermaid__control--wide" data-docattice-viewer-action="actual-size" title="Actual size" aria-label="Actual size">1:1</button>
+            <button type="button" class="docattice-github-mermaid__control docattice-github-mermaid__control--wide" data-docattice-viewer-action="fit" title="Fit to width" aria-label="Fit to width">Fit</button>
+          </div>
+          <iframe class="docattice-github-mermaid__frame" title="Mermaid diagram viewer"></iframe>
+          <template class="docattice-github-mermaid__svg-template">${renderedSvg}</template>
+        </div>
         <details class="docattice-github-mermaid__source">
           <summary>Mermaid source</summary>
           <pre><code>${escapeHtml(source)}</code></pre>
@@ -7470,7 +7687,9 @@
       const rendered = renderMermaidSvg(source)
       const wrapper = document.createElement('div')
       wrapper.innerHTML = replacementHtml(source, rendered)
-      element.replaceWith(wrapper.firstElementChild)
+      const figure = wrapper.firstElementChild
+      element.replaceWith(figure)
+      setupMermaidViewer(figure)
     } catch (error) {
       element.setAttribute(ERROR_ATTR, 'true')
       const wrapper = document.createElement('div')
@@ -7634,14 +7853,52 @@
         background: var(--bgColor-default, #ffffff);
       }
       .docattice-github-mermaid__stage {
-        overflow: auto;
-        padding: 16px;
+        overflow: hidden;
+        padding: 0;
       }
-      .docattice-github-mermaid__stage svg {
+      .docattice-github-mermaid__toolbar {
+        align-items: center;
+        background: var(--bgColor-muted, #f6f8fa);
+        border-bottom: 1px solid var(--borderColor-muted, #d8dee4);
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+        padding: 8px;
+      }
+      .docattice-github-mermaid__control {
+        appearance: none;
+        background: var(--button-default-bgColor-rest, #f6f8fa);
+        border: 1px solid var(--button-default-borderColor-rest, #d0d7de);
+        border-radius: 6px;
+        color: var(--button-default-fgColor-rest, #24292f);
+        cursor: pointer;
+        font: 600 13px/1 ${UI_FONT};
+        height: 28px;
+        min-width: 32px;
+        padding: 0 8px;
+      }
+      .docattice-github-mermaid__control:hover:not(:disabled) {
+        background: var(--button-default-bgColor-hover, #f3f4f6);
+      }
+      .docattice-github-mermaid__control:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .docattice-github-mermaid__control--wide {
+        min-width: 44px;
+      }
+      .docattice-github-mermaid__zoom-label {
+        color: var(--fgColor-muted, #57606a);
+        font: 600 12px/1 ${UI_FONT};
+        min-width: 44px;
+        text-align: center;
+      }
+      .docattice-github-mermaid__frame {
+        background: transparent;
+        border: 0;
         display: block;
-        margin: 0 auto;
-        max-width: 100%;
-        height: auto;
+        height: 360px;
+        width: 100%;
       }
       .docattice-github-mermaid__source {
         border-top: 1px solid var(--borderColor-muted, #d8dee4);

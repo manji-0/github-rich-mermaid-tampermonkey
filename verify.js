@@ -2391,6 +2391,11 @@ function assertGitHubReplacementShell(renderer) {
   assertIncludes(html, 'class="docattice-github-mermaid"', 'GitHub replacement shell')
   assertIncludes(html, 'data-docattice-diagram-type="flowchart"', 'GitHub replacement shell')
   assertIncludes(html, 'class="docattice-github-mermaid__stage"', 'GitHub replacement shell')
+  assertIncludes(html, 'class="docattice-github-mermaid__frame"', 'GitHub replacement shell')
+  assertIncludes(html, 'data-docattice-viewer-action="zoom-in"', 'GitHub replacement shell')
+  assertIncludes(html, 'data-docattice-viewer-action="zoom-out"', 'GitHub replacement shell')
+  assertIncludes(html, 'data-docattice-viewer-action="fit"', 'GitHub replacement shell')
+  assertIncludes(html, 'class="docattice-github-mermaid__svg-template"', 'GitHub replacement shell')
   assertIncludes(html, '<summary>Mermaid source</summary>', 'GitHub replacement shell')
   assertIncludes(html, 'flowchart LR', 'GitHub replacement shell')
   if (!html.includes('<svg') || !html.includes('data-diagram-body="true"')) {
