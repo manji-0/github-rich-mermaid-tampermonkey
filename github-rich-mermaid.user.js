@@ -1390,10 +1390,7 @@
       const direct = Math.abs(startTurnY - endTurnY) < 0.1
         ? simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
         : simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
-      const backEdge = direction === 'BT'
-        ? fromSide === 'bottom' && toSide === 'top' && start.y < end.y
-        : fromSide === 'top' && toSide === 'bottom' && start.y > end.y
-      if (backEdge && obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+      if (obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
         return flowchartAvoidingBackEdgeRoute(start, end, false, startTurnY, endTurnY, obstacles) || direct
       }
       return direct
@@ -1407,15 +1404,16 @@
       const direct = Math.abs(startTurnX - endTurnX) < 0.1
         ? simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: endTurnX, y: end.y }, end])
         : simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: startTurnX, y: end.y }, { x: endTurnX, y: end.y }, end])
-      const backEdge = direction === 'RL'
-        ? fromSide === 'right' && toSide === 'left' && start.x < end.x
-        : fromSide === 'left' && toSide === 'right' && start.x > end.x
-      if (backEdge && obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+      if (obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
         return flowchartAvoidingBackEdgeRoute(start, end, true, startTurnX, endTurnX, obstacles) || direct
       }
       return direct
     }
-    return routeOrthogonal(from, to, [], 24)
+    const sideRoute = routeOrthogonalWithSides(from, to, fromSide, toSide, [], 24)
+    const fallbackRoute = routeOrthogonal(from, to, [], 24)
+    return flowchartRoutePenalty(sideRoute, obstacles) <= flowchartRoutePenalty(fallbackRoute, obstacles)
+      ? sideRoute
+      : fallbackRoute
   }
 
   function c4RelationSides(rel, from, to) {
@@ -2053,6 +2051,7 @@
       circlePadding: 16,
       rootPadX: 48,
       rootPadY: 36,
+      viewportPadX: 96,
       cellGapX: 56,
       cellGapY: 72,
       nodeRx: 6,
@@ -2687,7 +2686,7 @@
     let contentBounds = flowchartContentBounds()
     shiftFlowchartContent(Math.max(0, padX - contentBounds.left), Math.max(0, padY - contentBounds.top))
     contentBounds = flowchartContentBounds()
-    const width = Math.max(300, contentBounds.right + padX)
+    const width = Math.max(300, contentBounds.right + padX + F.viewportPadX)
     const height = Math.max(200, contentBounds.bottom + padY)
     const renderFlowchartLabel = (label, placement) => {
       const rectValue = placement.rect

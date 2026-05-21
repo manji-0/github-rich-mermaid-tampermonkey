@@ -36,7 +36,7 @@ const requestedDiagramTypes = new Set([
 ])
 
 const galleryViewBoxExpectations = [
-  { index: 1, type: 'flowchart', viewBox: '0 0 720.0 200.0' },
+  { index: 1, type: 'flowchart', viewBox: '0 0 816.0 200.0' },
   { index: 2, type: 'sequenceDiagram', viewBox: '0 0 520.0 240.0' },
   { index: 3, type: 'classDiagram', viewBox: '0 0 468.5 216.0' },
   { index: 4, type: 'stateDiagram-v2', viewBox: '0 0 300.0 536.0' },
@@ -1009,7 +1009,7 @@ const flowchartRustSamples = [
   Publish[Publish revision]
   Draft --> Analyze --> Publish`,
     check({ svg }) {
-      assertIncludes(svg, 'viewBox="0 0 720.0 200.0"', this.name)
+      assertIncludes(svg, 'viewBox="0 0 816.0 200.0"', this.name)
       for (const edge of ['Draft->Analyze', 'Analyze->Publish']) assertIncludes(svg, `data-flowchart-edge="${edge}"`, this.name)
       assertFlowchartNodeTextCentered(svg, 'Draft', 'Draft save', this.name)
       assertFlowchartNodeTextCentered(svg, 'Analyze', 'Analyze graph', this.name)
@@ -1023,7 +1023,7 @@ const flowchartRustSamples = [
   B -- Approved --> C[Merge]
   B -- Changes --> A`,
     check({ svg }) {
-      assertIncludes(svg, 'viewBox="0 0 768.0 280.0"', this.name)
+      assertIncludes(svg, 'viewBox="0 0 864.0 280.0"', this.name)
       const a = flowchartNodeBounds(svg, 'A')
       const b = flowchartNodeBounds(svg, 'B')
       const c = flowchartNodeBounds(svg, 'C')
@@ -1057,6 +1057,34 @@ const flowchartRustSamples = [
         const labelRect = flowchartEdgeLabelRect(svg, edgeId, label)
         assertRectInside(labelRect, svgViewBoxRect(svg, this.name), `${this.name}: ${edgeId} label clipped`)
         if (rectsIntersect(labelRect, decisionRect)) throw new Error(`${this.name}: ${edgeId} label overlaps decision body`)
+      }
+    },
+  },
+  {
+    name: 'Flowchart branch endings keep right viewport padding',
+    source: `flowchart TD
+  A[Read Mermaid source] --> B[Parse C4 model]
+  B --> C[Measure leaves and boundaries]
+  C --> D[Place nodes in recursive grids]
+  D --> E[Build relation work items]
+  E --> F[Route orthogonal polylines]
+  F --> G[Assign relation labels]
+  G --> H[Build validation scene]
+  H --> I[Repair labels or routes]
+  I --> J[Derive gap overrides]
+  J --> K{Compact scene better?}
+  K -- yes --> L[Use compact scene]
+  K -- no --> M[Use initial scene]
+  L --> N[Render SVG]
+  M --> N`,
+    check({ svg }) {
+      const viewBox = svgViewBoxRect(svg, this.name)
+      const rightMostNode = Math.max(...['K', 'L', 'M', 'N'].map((id) => {
+        const box = flowchartNodeBounds(svg, id)
+        return box.x + box.w
+      }))
+      if (viewBox.right - rightMostNode < 120) {
+        throw new Error(`${this.name}: right viewport padding too small: ${viewBox.right - rightMostNode}`)
       }
     },
   },
@@ -1237,6 +1265,8 @@ const flowchartRustSamples = [
     },
   },
 ]
+
+const flowchartQualitySamples = buildFlowchartQualitySamples()
 
 const erRustSamples = [
   {
@@ -2491,9 +2521,9 @@ function flowchartNodeBounds(svg, id) {
   const pathStart = group.indexOf('<path ')
   if (pathStart >= 0) {
     const path = group.slice(pathStart, group.indexOf('>', pathStart) + 1)
-    const numbers = (svgAttrValue(path, 'd').match(/-?\d+(?:\.\d+)?/g) || []).map(Number)
-    const xs = numbers.filter((_, index) => index % 2 === 0)
-    const ys = numbers.filter((_, index) => index % 2 === 1)
+    const points = parseSvgPathPoints(svgAttrValue(path, 'd'))
+    const xs = points.map((point) => point.x)
+    const ys = points.map((point) => point.y)
     if (xs.length && ys.length) {
       const minX = Math.min(...xs)
       const maxX = Math.max(...xs)
@@ -2777,6 +2807,225 @@ function flowchartCollinearOverlapCount(paths) {
     }
   }
   return count
+}
+
+function edgeKey(from, to) {
+  return `${from}->${to}`
+}
+
+function flowchartQualitySample(name, direction, lines, nodes, edges, labels = [], options = {}) {
+  return {
+    name,
+    source: [`flowchart ${direction}`, ...lines.map((lineValue) => `  ${lineValue}`)].join('\n'),
+    nodes,
+    edges: edges.map(([from, to]) => edgeKey(from, to)),
+    labels,
+    maxOverlapCount: options.maxOverlapCount ?? Math.max(2, Math.ceil(edges.length * 0.12)),
+    maxWidthPerNode: options.maxWidthPerNode ?? 280,
+    maxHeightPerNode: options.maxHeightPerNode ?? 260,
+  }
+}
+
+function buildFlowchartQualitySamples() {
+  const samples = []
+  const directions = ['TD', 'LR', 'BT', 'RL']
+  directions.forEach((direction) => {
+    for (const count of [4, 7, 10]) {
+      const nodes = Array.from({ length: count }, (_, index) => `C${direction}${index}`)
+      const lines = nodes.map((id, index) => `${id}[${index ? `Stage ${index}` : 'Start'}]`)
+      for (let index = 0; index < nodes.length - 1; index += 1) {
+        lines.push(`${nodes[index]} --> ${nodes[index + 1]}`)
+      }
+      samples.push(flowchartQualitySample(`quality chain ${direction} ${count}`, direction, lines, nodes, nodes.slice(0, -1).map((id, index) => [id, nodes[index + 1]])))
+    }
+  })
+  directions.forEach((direction) => {
+    for (let index = 0; index < 6; index += 1) {
+      const p = `D${direction}${index}`
+      const nodes = [`${p}Start`, `${p}Decision`, `${p}Yes`, `${p}No`, `${p}Join`, `${p}End`]
+      const lines = [
+        `${nodes[0]}[Receive request ${index}] --> ${nodes[1]}{Route ready?}`,
+        `${nodes[1]} -- yes ${index} --> ${nodes[2]}[Accept path ${index}]`,
+        `${nodes[1]} -- no ${index} --> ${nodes[3]}[Repair path ${index}]`,
+        `${nodes[2]} --> ${nodes[4]}[Join result ${index}]`,
+        `${nodes[3]} --> ${nodes[4]}`,
+        `${nodes[4]} --> ${nodes[5]}[Finish ${index}]`,
+      ]
+      samples.push(flowchartQualitySample(`quality diamond split merge ${direction} ${index}`, direction, lines, nodes, [
+        [nodes[0], nodes[1]], [nodes[1], nodes[2]], [nodes[1], nodes[3]], [nodes[2], nodes[4]], [nodes[3], nodes[4]], [nodes[4], nodes[5]],
+      ], [`yes ${index}`, `no ${index}`], { maxOverlapCount: 2 }))
+    }
+  })
+  directions.forEach((direction) => {
+    for (const count of [3, 4, 5, 6]) {
+      const prefix = `F${direction}${count}`
+      const nodes = [`${prefix}Hub`, ...Array.from({ length: count }, (_, index) => `${prefix}S${index}`), `${prefix}Sink`]
+      const lines = [`${nodes[0]}[Dispatch hub]`]
+      const edges = []
+      for (let index = 0; index < count; index += 1) {
+        lines.push(`${nodes[0]} -- task ${index} --> ${nodes[index + 1]}[Worker ${index}]`)
+        lines.push(`${nodes[index + 1]} --> ${nodes[nodes.length - 1]}[Shared sink]`)
+        edges.push([nodes[0], nodes[index + 1]], [nodes[index + 1], nodes[nodes.length - 1]])
+      }
+      samples.push(flowchartQualitySample(`quality fanout merge ${direction} ${count}`, direction, lines, nodes, edges, Array.from({ length: count }, (_, index) => `task ${index}`), { maxOverlapCount: count }))
+    }
+  })
+  directions.forEach((direction) => {
+    for (let index = 0; index < 4; index += 1) {
+      const p = `L${direction}${index}`
+      const nodes = [`${p}A`, `${p}B`, `${p}C`, `${p}D`, `${p}E`]
+      const lines = [
+        `${nodes[0]}[Draft ${index}] --> ${nodes[1]}{Review ${index}?}`,
+        `${nodes[1]} -- approved --> ${nodes[2]}[Merge ${index}]`,
+        `${nodes[1]} -- changes --> ${nodes[0]}`,
+        `${nodes[2]} --> ${nodes[3]}[Publish ${index}]`,
+        `${nodes[3]} -. audit .-> ${nodes[4]}[Audit ${index}]`,
+        `${nodes[4]} --> ${nodes[1]}`,
+      ]
+      samples.push(flowchartQualitySample(`quality loop review ${direction} ${index}`, direction, lines, nodes, [
+        [nodes[0], nodes[1]], [nodes[1], nodes[2]], [nodes[1], nodes[0]], [nodes[2], nodes[3]], [nodes[3], nodes[4]], [nodes[4], nodes[1]],
+      ], ['approved', 'changes', 'audit'], { maxOverlapCount: 3 }))
+    }
+  })
+  directions.forEach((direction) => {
+    for (let index = 0; index < 3; index += 1) {
+      const p = `S${direction}${index}`
+      const nodes = [`${p}In`, `${p}A`, `${p}B`, `${p}C`, `${p}Out`]
+      const lines = [
+        `subgraph ${p}Group[Service group ${index}]`,
+        `direction ${direction}`,
+        `${nodes[1]}[Cache check ${index}] --> ${nodes[2]}{Hit?}`,
+        `${nodes[2]} -- hit --> ${nodes[3]}[Return cached]`,
+        `end`,
+        `${nodes[0]}[Request ${index}] --> ${nodes[1]}`,
+        `${nodes[2]} -- miss --> ${nodes[4]}[Fetch origin ${index}]`,
+        `${nodes[3]} --> ${nodes[4]}`,
+      ]
+      samples.push(flowchartQualitySample(`quality subgraph branch ${direction} ${index}`, direction, lines, nodes, [
+        [nodes[1], nodes[2]], [nodes[2], nodes[3]], [nodes[0], nodes[1]], [nodes[2], nodes[4]], [nodes[3], nodes[4]],
+      ], ['hit', 'miss'], { maxOverlapCount: 2, maxWidthPerNode: 380, maxHeightPerNode: 220 }))
+    }
+  })
+  directions.forEach((direction) => {
+    for (let index = 0; index < 3; index += 1) {
+      const p = `Q${direction}${index}`
+      const nodes = [`${p}Rect`, `${p}Circle`, `${p}Sub`, `${p}Store`, `${p}Hex`, `${p}Done`]
+      const lines = [
+        `${nodes[0]}[Long readable operation ${index}] --> ${nodes[1]}((Queue ${index}))`,
+        `${nodes[1]} --> ${nodes[2]}[[Reusable worker ${index}]]`,
+        `${nodes[2]} --> ${nodes[3]}[(Store ${index})]`,
+        `${nodes[3]} --> ${nodes[4]}{{Gate ${index}}}`,
+        `${nodes[4]} -- continue --> ${nodes[5]}([Complete ${index}])`,
+        `${nodes[4]} -- retry --> ${nodes[1]}`,
+      ]
+      samples.push(flowchartQualitySample(`quality mixed shapes ${direction} ${index}`, direction, lines, nodes, [
+        [nodes[0], nodes[1]], [nodes[1], nodes[2]], [nodes[2], nodes[3]], [nodes[3], nodes[4]], [nodes[4], nodes[5]], [nodes[4], nodes[1]],
+      ], ['continue', 'retry'], { maxOverlapCount: 3 }))
+    }
+  })
+  directions.forEach((direction) => {
+    for (let index = 0; index < 2; index += 1) {
+      const p = `Z${direction}${index}`
+      const nodes = [`${p}Start`, `${p}Auth`, `${p}Plan`, `${p}Run`, `${p}Audit`, `${p}Done`, `${p}Hold`]
+      const lines = [
+        `${nodes[0]}[Incoming workflow ${index}] --> ${nodes[1]}{Authorized?}`,
+        `${nodes[1]} -- user accepted --> ${nodes[2]}[Build detailed execution plan]`,
+        `${nodes[1]} -- needs review --> ${nodes[6]}[Hold for manual review]`,
+        `${nodes[2]} --> ${nodes[3]}[Run selected operations]`,
+        `${nodes[3]} --> ${nodes[4]}{Audit clean?}`,
+        `${nodes[4]} -- clean --> ${nodes[5]}[Close workflow successfully]`,
+        `${nodes[4]} -- retry required --> ${nodes[2]}`,
+        `${nodes[6]} --> ${nodes[1]}`,
+      ]
+      samples.push(flowchartQualitySample(`quality zigzag labeled workflow ${direction} ${index}`, direction, lines, nodes, [
+        [nodes[0], nodes[1]], [nodes[1], nodes[2]], [nodes[1], nodes[6]], [nodes[2], nodes[3]], [nodes[3], nodes[4]], [nodes[4], nodes[5]], [nodes[4], nodes[2]], [nodes[6], nodes[1]],
+      ], ['user accepted', 'needs review', 'clean', 'retry required'], { maxOverlapCount: 4 }))
+    }
+  })
+  return samples.slice(0, 100)
+}
+
+function assertFlowchartQualitySample(svg, sample) {
+  const viewBox = svgViewBoxRect(svg, sample.name)
+  const nodeRects = new Map()
+  sample.nodes.forEach((id) => {
+    const box = flowchartNodeBounds(svg, id)
+    if (!(box.w > 0 && box.h > 0)) throw new Error(`${sample.name}: node ${id} has invalid bounds ${JSON.stringify(box)}`)
+    if (box.w > sample.maxWidthPerNode || box.h > sample.maxHeightPerNode) {
+      throw new Error(`${sample.name}: node ${id} too large ${JSON.stringify(box)}`)
+    }
+    const rectValue = rectFromBox(box)
+    assertRectInside(rectValue, viewBox, `${sample.name}: node ${id} clipped`)
+    nodeRects.set(id, rectValue)
+  })
+  const nodeEntries = [...nodeRects.entries()]
+  for (let leftIndex = 0; leftIndex < nodeEntries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < nodeEntries.length; rightIndex += 1) {
+      const [leftId, leftRect] = nodeEntries[leftIndex]
+      const [rightId, rightRect] = nodeEntries[rightIndex]
+      if (rectsIntersect(c4DeflateTestRect(leftRect, 1), c4DeflateTestRect(rightRect, 1))) {
+        throw new Error(`${sample.name}: nodes overlap ${leftId}/${rightId}`)
+      }
+    }
+  }
+  const paths = flowchartEdgePaths(svg)
+  sample.edges.forEach((edgeId) => {
+    if (!paths.has(edgeId)) throw new Error(`${sample.name}: missing edge ${edgeId}`)
+  })
+  for (const [edgeId, points] of paths.entries()) {
+    const endpoints = edgeId.split('->')
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const a = points[index]
+      const b = points[index + 1]
+      if (Math.abs(a.x - b.x) > 0.1 && Math.abs(a.y - b.y) > 0.1) {
+        throw new Error(`${sample.name}: non-orthogonal segment in ${edgeId}: ${JSON.stringify([a, b])}`)
+      }
+    }
+    const routeBounds = points.reduce((bounds, point) => ({
+      left: Math.min(bounds.left, point.x),
+      top: Math.min(bounds.top, point.y),
+      right: Math.max(bounds.right, point.x),
+      bottom: Math.max(bounds.bottom, point.y),
+    }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity })
+    assertRectInside(routeBounds, viewBox, `${sample.name}: edge ${edgeId} clipped`)
+    for (const [nodeId, rectValue] of nodeRects.entries()) {
+      if (endpoints.includes(nodeId)) continue
+      if (segments(points).some((segment) => segmentIntersectsRect(segment, c4DeflateTestRect(rectValue, 2)))) {
+        throw new Error(`${sample.name}: edge ${edgeId} crosses node ${nodeId}`)
+      }
+    }
+  }
+  const overlapCount = flowchartCollinearOverlapCount(paths)
+  if (overlapCount > sample.maxOverlapCount) {
+    throw new Error(`${sample.name}: too many collinear edge overlaps ${overlapCount}/${sample.maxOverlapCount}`)
+  }
+  sample.labels.forEach((label) => {
+    if (svg.includes(`>${label}</text>`)) return
+    const missingTokens = label.split(/\s+/).filter((token) => token && !svg.includes(`>${token}</text>`))
+    if (missingTokens.length) throw new Error(`${sample.name}: missing label ${label}`)
+  })
+  sample.edges.forEach((edgeId) => {
+    const group = flowchartEdgeGroup(svg, edgeId)
+    const labelTexts = [...group.matchAll(/<text\b[^>]*>([^<]+)<\/text>/g)].map((match) => match[1])
+    labelTexts.forEach((label) => {
+      const labelRect = flowchartEdgeLabelRect(svg, edgeId, label)
+      assertRectInside(labelRect, viewBox, `${sample.name}: edge ${edgeId} label clipped`)
+      for (const [nodeId, rectValue] of nodeRects.entries()) {
+        if (rectsIntersect(labelRect, c4DeflateTestRect(rectValue, 1))) {
+          throw new Error(`${sample.name}: edge ${edgeId} label ${label} overlaps node ${nodeId}`)
+        }
+      }
+    })
+  })
+}
+
+function c4DeflateTestRect(rectValue, amount) {
+  return {
+    left: rectValue.left + amount,
+    top: rectValue.top + amount,
+    right: rectValue.right - amount,
+    bottom: rectValue.bottom - amount,
+  }
 }
 
 function pairedOffsetSymmetryError(offsets) {
@@ -3213,6 +3462,14 @@ function main() {
     if (!svg.includes('<svg')) throw new Error(`${sample.name}: missing svg`)
     assertRustSvgShell(svg, sample.name)
     sample.check({ svg, renderer })
+  }
+
+  if (flowchartQualitySamples.length < 100) throw new Error(`expected at least 100 flowchart quality samples, got ${flowchartQualitySamples.length}`)
+  for (const sample of flowchartQualitySamples) {
+    const svg = renderer.renderMermaidSvg(sample.source)
+    if (!svg.includes('<svg')) throw new Error(`${sample.name}: missing svg`)
+    assertRustSvgShell(svg, sample.name)
+    assertFlowchartQualitySample(svg, sample)
   }
 
   for (const sample of erRustSamples) {

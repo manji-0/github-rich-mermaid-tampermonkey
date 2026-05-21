@@ -103,6 +103,8 @@ Most diagram types use compact, purpose-built parsers and SVG renderers. C4 diag
 
 Read the detailed explanation in [Rendering Algorithm](./docs/rendering-algorithm.md).
 
+For manual flowchart visual QA, open the [Flowchart Gallery](./docs/flowchart-gallery.md).
+
 ## Development
 
 The main userscript is [github-rich-mermaid.user.js](./github-rich-mermaid.user.js). The verifier is [verify.js](./verify.js).
