@@ -1367,7 +1367,15 @@
     return score
   }
 
-  function flowchartLaneCrossingPenalty(points, occupiedSegments = []) {
+  function flowchartEdgesShareEndpoint(leftEdge, rightSegment) {
+    if (!leftEdge || !rightSegment.edgeFrom || !rightSegment.edgeTo) return false
+    return leftEdge.from === rightSegment.edgeFrom ||
+      leftEdge.from === rightSegment.edgeTo ||
+      leftEdge.to === rightSegment.edgeFrom ||
+      leftEdge.to === rightSegment.edgeTo
+  }
+
+  function flowchartLaneCrossingPenalty(points, occupiedSegments = [], currentEdge = null) {
     let score = 0
     const routeSegments = c4SegmentsFromRoute(points)
     for (const segmentValue of routeSegments) {
@@ -1381,56 +1389,110 @@
           horizontal.axis > vertical.start + 0.1 &&
           horizontal.axis < vertical.end - 0.1
         ) {
-          score += 25000
+          score += flowchartEdgesShareEndpoint(currentEdge, occupied) ? 25000 : 120000
         }
       }
     }
     return score
   }
 
-  function flowchartRoutePenalty(points, obstacles, occupiedSegments = []) {
+  function flowchartRoutePenalty(points, obstacles, occupiedSegments = [], currentEdge = null) {
     let score = c4PathLength(points) + c4BendCount(points) * 12
     for (const rectValue of obstacles) {
       if (c4PolylineIntersectsRect(points, rectValue)) score += 100000
     }
     score += flowchartLaneOverlapPenalty(points, occupiedSegments)
-    score += flowchartLaneCrossingPenalty(points, occupiedSegments)
+    score += flowchartLaneCrossingPenalty(points, occupiedSegments, currentEdge)
     return score
   }
 
-  function flowchartAvoidingBackEdgeRoute(start, end, horizontal, startTurn, endTurn, obstacles = []) {
+  function flowchartAvoidingBackEdgeRoute(start, end, horizontal, startTurn, endTurn, obstacles = [], occupiedSegments = [], currentEdge = null) {
     if (horizontal) {
-      const spanLeft = Math.min(startTurn, endTurn)
-      const spanRight = Math.max(startTurn, endTurn)
+      const turnCandidatesForX = (turn, anchorX) => {
+        const values = [turn]
+        const bandLeft = Math.min(turn, anchorX)
+        const bandRight = Math.max(turn, anchorX)
+        const blockers = occupiedSegments.filter((segmentValue) => (
+          segmentValue.orientation === 'horizontal' &&
+          segmentValue.end >= bandLeft &&
+          segmentValue.start <= bandRight
+        ))
+        if (blockers.length) {
+          values.push(...blockers.map((segmentValue) => (
+            turn < anchorX ? segmentValue.start - 6 : segmentValue.end + 6
+          )))
+        }
+        return [...new Set(values
+          .filter((value) => turn < anchorX ? value <= turn : value >= turn)
+          .map((value) => Math.round(value * 10) / 10))]
+      }
+      const spanLeft = Math.min(start.x, end.x, startTurn, endTurn)
+      const spanRight = Math.max(start.x, end.x, startTurn, endTurn)
       const blockers = obstacles.filter((rectValue) => rectValue.right >= spanLeft && rectValue.left <= spanRight)
+      const crossingBlockers = occupiedSegments.filter((segmentValue) => (
+        segmentValue.orientation === 'vertical' &&
+        segmentValue.axis >= spanLeft &&
+        segmentValue.axis <= spanRight
+      ))
       const topLane = Math.min(start.y, end.y, ...blockers.map((rectValue) => rectValue.top)) - 36
       const bottomLane = Math.max(start.y, end.y, ...blockers.map((rectValue) => rectValue.bottom)) + 36
-      return [topLane, bottomLane]
-        .map((lane) => simplifyPolyline([
-          start,
-          { x: startTurn, y: start.y },
-          { x: startTurn, y: lane },
-          { x: endTurn, y: lane },
-          { x: endTurn, y: end.y },
-          end,
-        ]))
-        .sort((left, right) => flowchartRoutePenalty(left, obstacles) - flowchartRoutePenalty(right, obstacles) || c4PathLength(left) - c4PathLength(right))[0]
+      const topOuterLane = Math.min(topLane, ...crossingBlockers.map((segmentValue) => segmentValue.start - 36))
+      const bottomOuterLane = Math.max(bottomLane, ...crossingBlockers.map((segmentValue) => segmentValue.end + 36))
+      const laneCandidates = [...new Set([topLane, bottomLane, topOuterLane, bottomOuterLane].map((lane) => Math.round(lane * 10) / 10))]
+      const startTurnCandidates = turnCandidatesForX(startTurn, start.x)
+      const endTurnCandidates = turnCandidatesForX(endTurn, end.x)
+      return startTurnCandidates.flatMap((startTurnValue) => endTurnCandidates.flatMap((endTurnValue) => laneCandidates.map((lane) => simplifyPolyline([
+        start,
+        { x: startTurnValue, y: start.y },
+        { x: startTurnValue, y: lane },
+        { x: endTurnValue, y: lane },
+        { x: endTurnValue, y: end.y },
+        end,
+      ]))))
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments, currentEdge) - flowchartRoutePenalty(right, obstacles, occupiedSegments, currentEdge) || c4PathLength(left) - c4PathLength(right))[0]
     }
-    const spanTop = Math.min(startTurn, endTurn)
-    const spanBottom = Math.max(startTurn, endTurn)
+    const turnCandidatesForY = (turn, anchorY) => {
+      const values = [turn]
+      const bandTop = Math.min(turn, anchorY)
+      const bandBottom = Math.max(turn, anchorY)
+      const blockers = occupiedSegments.filter((segmentValue) => (
+        segmentValue.orientation === 'vertical' &&
+        segmentValue.end >= bandTop &&
+        segmentValue.start <= bandBottom
+      ))
+      if (blockers.length) {
+        values.push(...blockers.map((segmentValue) => (
+          turn < anchorY ? segmentValue.start - 6 : segmentValue.end + 6
+        )))
+      }
+      return [...new Set(values
+        .filter((value) => turn < anchorY ? value <= turn : value >= turn)
+        .map((value) => Math.round(value * 10) / 10))]
+    }
+    const spanTop = Math.min(start.y, end.y, startTurn, endTurn)
+    const spanBottom = Math.max(start.y, end.y, startTurn, endTurn)
     const blockers = obstacles.filter((rectValue) => rectValue.bottom >= spanTop && rectValue.top <= spanBottom)
+    const crossingBlockers = occupiedSegments.filter((segmentValue) => (
+      segmentValue.orientation === 'horizontal' &&
+      segmentValue.axis >= spanTop &&
+      segmentValue.axis <= spanBottom
+    ))
     const leftLane = Math.min(start.x, end.x, ...blockers.map((rectValue) => rectValue.left)) - 36
     const rightLane = Math.max(start.x, end.x, ...blockers.map((rectValue) => rectValue.right)) + 36
-    return [leftLane, rightLane]
-      .map((lane) => simplifyPolyline([
-        start,
-        { x: start.x, y: startTurn },
-        { x: lane, y: startTurn },
-        { x: lane, y: endTurn },
-        { x: end.x, y: endTurn },
-        end,
-      ]))
-      .sort((left, right) => flowchartRoutePenalty(left, obstacles) - flowchartRoutePenalty(right, obstacles) || c4PathLength(left) - c4PathLength(right))[0]
+    const leftOuterLane = Math.min(leftLane, ...crossingBlockers.map((segmentValue) => segmentValue.start - 36))
+    const rightOuterLane = Math.max(rightLane, ...crossingBlockers.map((segmentValue) => segmentValue.end + 36))
+    const laneCandidates = [...new Set([leftLane, rightLane, leftOuterLane, rightOuterLane].map((lane) => Math.round(lane * 10) / 10))]
+    const startTurnCandidates = turnCandidatesForY(startTurn, start.y)
+    const endTurnCandidates = turnCandidatesForY(endTurn, end.y)
+    return startTurnCandidates.flatMap((startTurnValue) => endTurnCandidates.flatMap((endTurnValue) => laneCandidates.map((lane) => simplifyPolyline([
+      start,
+      { x: start.x, y: startTurnValue },
+      { x: lane, y: startTurnValue },
+      { x: lane, y: endTurnValue },
+      { x: end.x, y: endTurnValue },
+      end,
+    ]))))
+      .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments, currentEdge) - flowchartRoutePenalty(right, obstacles, occupiedSegments, currentEdge) || c4PathLength(left) - c4PathLength(right))[0]
   }
 
   function routeFlowchartEdge(from, to, horizontal, sourceLaneOffset = 0, targetLaneOffset = 0, options = {}) {
@@ -1439,6 +1501,7 @@
     const end = anchorOnBox(to, toSide)
     const obstacles = options.obstacles || []
     const occupiedSegments = options.occupiedSegments || []
+    const currentEdge = options.currentEdge || null
     const direction = options.direction || (horizontal ? 'LR' : 'TD')
     const sourceLaneDepthOffset = options.sourceLaneDepthOffset || 0
     const targetLaneDepthOffset = options.targetLaneDepthOffset || 0
@@ -1465,13 +1528,23 @@
       }
       const direct = laneAdjustments
         .map(buildDirect)
-        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments) - flowchartRoutePenalty(right, obstacles, occupiedSegments) || c4PathLength(left) - c4PathLength(right))[0]
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments, currentEdge) - flowchartRoutePenalty(right, obstacles, occupiedSegments, currentEdge) || c4PathLength(left) - c4PathLength(right))[0]
       const backwards = (direction === 'TD' && start.y > end.y) || (direction === 'BT' && start.y < end.y)
       const intersectsObstacle = obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))
       if (intersectsObstacle || (backwards && flowchartExactLaneOverlapPenalty(direct, occupiedSegments) > 0)) {
-        const startTurnY = intersectsObstacle || direct.length <= 2 ? start.y + fromDir * 24 : direct[1].y
+        let startTurnY = intersectsObstacle || direct.length <= 2 ? start.y + fromDir * 24 : direct[1].y
+        if (intersectsObstacle && obstacles.length) {
+          const forwardBlockers = fromDir < 0
+            ? obstacles.filter((rectValue) => rectValue.bottom < start.y)
+            : obstacles.filter((rectValue) => rectValue.top > start.y)
+          if (forwardBlockers.length) {
+            startTurnY = fromDir < 0
+              ? Math.min(startTurnY, Math.max(...forwardBlockers.map((rectValue) => rectValue.bottom)) + 12)
+              : Math.max(startTurnY, Math.min(...forwardBlockers.map((rectValue) => rectValue.top)) - 12)
+          }
+        }
         const endTurnY = intersectsObstacle || direct.length <= 3 ? end.y + toDir * 24 : direct[direct.length - 2].y
-        return flowchartAvoidingBackEdgeRoute(start, end, false, startTurnY, endTurnY, obstacles) || direct
+        return flowchartAvoidingBackEdgeRoute(start, end, false, startTurnY, endTurnY, obstacles, occupiedSegments, currentEdge) || direct
       }
       return direct
     }
@@ -1497,19 +1570,19 @@
       }
       const direct = laneAdjustments
         .map(buildDirect)
-        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments) - flowchartRoutePenalty(right, obstacles, occupiedSegments) || c4PathLength(left) - c4PathLength(right))[0]
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments, currentEdge) - flowchartRoutePenalty(right, obstacles, occupiedSegments, currentEdge) || c4PathLength(left) - c4PathLength(right))[0]
       const backwards = (direction === 'LR' && start.x > end.x) || (direction === 'RL' && start.x < end.x)
       const intersectsObstacle = obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))
       if (intersectsObstacle || (backwards && flowchartExactLaneOverlapPenalty(direct, occupiedSegments) > 0)) {
         const startTurnX = intersectsObstacle || direct.length <= 2 ? start.x + fromDir * 24 : direct[1].x
         const endTurnX = intersectsObstacle || direct.length <= 3 ? end.x + toDir * 24 : direct[direct.length - 2].x
-        return flowchartAvoidingBackEdgeRoute(start, end, true, startTurnX, endTurnX, obstacles) || direct
+        return flowchartAvoidingBackEdgeRoute(start, end, true, startTurnX, endTurnX, obstacles, occupiedSegments, currentEdge) || direct
       }
       return direct
     }
     const sideRoute = routeOrthogonalWithSides(from, to, fromSide, toSide, [], 24)
     const fallbackRoute = routeOrthogonal(from, to, [], 24)
-    return flowchartRoutePenalty(sideRoute, obstacles, occupiedSegments) <= flowchartRoutePenalty(fallbackRoute, obstacles, occupiedSegments)
+    return flowchartRoutePenalty(sideRoute, obstacles, occupiedSegments, currentEdge) <= flowchartRoutePenalty(fallbackRoute, obstacles, occupiedSegments, currentEdge)
       ? sideRoute
       : fallbackRoute
   }
@@ -2754,10 +2827,15 @@
         direction,
         obstacles: flowchartObstaclesForEdge(edge),
         occupiedSegments: flowchartOccupiedSegments,
+        currentEdge: edge,
         sourceLaneDepthOffset: sourceLaneDepthOffsets.get(edgeIndex) || 0,
         targetLaneDepthOffset: targetLaneDepthOffsets.get(edgeIndex) || 0,
       })
-      flowchartOccupiedSegments.push(...c4SegmentsFromRoute(route))
+      flowchartOccupiedSegments.push(...c4SegmentsFromRoute(route).map((segmentValue) => ({
+        ...segmentValue,
+        edgeFrom: edge.from,
+        edgeTo: edge.to,
+      })))
       return { edge, edgeIndex, route, labelPlacement: null }
     }).filter(Boolean)
     const flowchartLabelForbiddenRects = [...positions.entries()]

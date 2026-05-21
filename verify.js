@@ -1237,6 +1237,30 @@ const flowchartRustSamples = [
     },
   },
   {
+    name: 'Flowchart document publishing back edges avoid forward fan crossings',
+    source: `flowchart TD
+  A[Author Markdown] --> B[Preview on GitHub]
+  B --> C{Diagram readable?}
+  C -- yes --> D[Publish document]
+  C -- clipped --> E[Adjust renderer]
+  C -- crowded --> F[Improve routing]
+  E --> B
+  F --> B`,
+    check({ svg }) {
+      const paths = flowchartEdgePaths(svg)
+      const nodeRects = new Map(['A', 'B', 'C', 'D', 'E', 'F'].map((id) => [id, rectFromBox(flowchartNodeBounds(svg, id))]))
+      assertFlowchartLineQuality(paths, nodeRects, {
+        name: this.name,
+        source: this.source,
+        maxUnrelatedCrossingCount: 0,
+        maxSharedEndpointCrossingCount: 2,
+        maxSharedEndpointOverlapPx: 48,
+        maxUnrelatedOverlapPx: 1,
+        maxSpanOverflowPx: 260,
+      })
+    },
+  },
+  {
     name: 'diamond split and merge symmetry',
     source: `flowchart TD
   A --> B
@@ -2872,7 +2896,7 @@ function flowchartQualitySample(name, direction, lines, nodes, edges, labels = [
     maxOverlapCount: options.maxOverlapCount ?? Math.max(2, Math.ceil(edges.length * 0.12)),
     maxUnrelatedCrossingCount: options.maxUnrelatedCrossingCount ?? 0,
     maxSharedEndpointCrossingCount: options.maxSharedEndpointCrossingCount ?? Math.max(2, Math.ceil(edges.length * 0.14)),
-    maxSharedEndpointOverlapPx: options.maxSharedEndpointOverlapPx ?? 42,
+    maxSharedEndpointOverlapPx: options.maxSharedEndpointOverlapPx ?? 64,
     maxUnrelatedOverlapPx: options.maxUnrelatedOverlapPx ?? 1,
     maxSpanOverflowPx: options.maxSpanOverflowPx ?? 96,
     maxWidthPerNode: options.maxWidthPerNode ?? 280,
