@@ -1210,6 +1210,65 @@
     return fy <= ty ? ['bottom', 'top'] : ['top', 'bottom']
   }
 
+  function flowchartDecisionExitSide(from, to, blockedSide) {
+    const fx = from.x + from.w / 2
+    const fy = from.y + from.h / 2
+    const tx = to.x + to.w / 2
+    const ty = to.y + to.h / 2
+    if (blockedSide === 'left' || blockedSide === 'right') return ty < fy ? 'top' : 'bottom'
+    return tx < fx ? 'left' : 'right'
+  }
+
+  function flowchartReturnEntrySide(from, to, blockedSide) {
+    const fx = from.x + from.w / 2
+    const fy = from.y + from.h / 2
+    const tx = to.x + to.w / 2
+    const ty = to.y + to.h / 2
+    if (blockedSide === 'left' || blockedSide === 'right') return fy < ty ? 'top' : 'bottom'
+    return fx < tx ? 'left' : 'right'
+  }
+
+  function adjustFlowchartDecisionExitSides(edges, edgeSides, positions, nodes) {
+    const incomingSidesByNode = new Map()
+    edges.forEach((edge, edgeIndex) => {
+      const sides = edgeSides[edgeIndex]
+      if (!sides) return
+      if (!incomingSidesByNode.has(edge.to)) incomingSidesByNode.set(edge.to, new Set())
+      incomingSidesByNode.get(edge.to).add(sides[1])
+    })
+    return edgeSides.map((sides, edgeIndex) => {
+      if (!sides) return sides
+      const edge = edges[edgeIndex]
+      if (nodes.get(edge.from)?.shape !== 'diamond') return sides
+      const incomingSides = incomingSidesByNode.get(edge.from)
+      if (!incomingSides?.has(sides[0])) return sides
+      const from = positions.get(edge.from)
+      const to = positions.get(edge.to)
+      if (!from || !to) return sides
+      return [flowchartDecisionExitSide(from, to, sides[0]), sides[1]]
+    })
+  }
+
+  function adjustFlowchartReturnEntrySides(edges, edgeSides, positions) {
+    const outgoingSidesByNode = new Map()
+    edges.forEach((edge, edgeIndex) => {
+      const sides = edgeSides[edgeIndex]
+      if (!sides) return
+      if (!outgoingSidesByNode.has(edge.from)) outgoingSidesByNode.set(edge.from, new Set())
+      outgoingSidesByNode.get(edge.from).add(sides[0])
+    })
+    return edgeSides.map((sides, edgeIndex) => {
+      if (!sides) return sides
+      const edge = edges[edgeIndex]
+      const outgoingSides = outgoingSidesByNode.get(edge.to)
+      if (!outgoingSides?.has(sides[1])) return sides
+      const from = positions.get(edge.from)
+      const to = positions.get(edge.to)
+      if (!from || !to) return sides
+      return [sides[0], flowchartReturnEntrySide(from, to, sides[1])]
+    })
+  }
+
   function anchorOnBox(box, side) {
     if (side === 'top') return { x: box.x + box.w / 2, y: box.y }
     if (side === 'bottom') return { x: box.x + box.w / 2, y: box.y + box.h }
@@ -1335,6 +1394,56 @@
     }
     occupied.push(laneKey)
     return simplifyPolyline(points)
+  }
+
+  function routeOrthogonalWithSidesAvoiding(from, to, fromSide, toSide, obstacles = [], occupiedSegments = [], currentEdge = null, stub = 24) {
+    const start = anchorOnBox(from, fromSide)
+    const end = anchorOnBox(to, toSide)
+    const sv = sideVector(fromSide)
+    const ev = sideVector(toSide)
+    const s = { x: start.x + sv.x * stub, y: start.y + sv.y * stub }
+    const e = { x: end.x + ev.x * stub, y: end.y + ev.y * stub }
+    const candidates = [routeOrthogonalWithSides(from, to, fromSide, toSide, [], stub)]
+    const seen = new Set()
+    const addCandidate = (points) => {
+      const route = simplifyPolyline(points)
+      const key = route.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join('|')
+      if (seen.has(key)) return
+      seen.add(key)
+      candidates.push(route)
+    }
+    const minY = Math.min(s.y, e.y)
+    const maxY = Math.max(s.y, e.y)
+    const minX = Math.min(s.x, e.x)
+    const maxX = Math.max(s.x, e.x)
+    const verticalLanes = [Math.min(s.x, e.x) - 48, Math.max(s.x, e.x) + 48]
+    const horizontalLanes = [Math.min(s.y, e.y) - 48, Math.max(s.y, e.y) + 48]
+    obstacles.forEach((rectValue) => {
+      if (rectValue.top <= maxY && rectValue.bottom >= minY) {
+        verticalLanes.push(rectValue.left - 14, rectValue.right + 14)
+      }
+      if (rectValue.left <= maxX && rectValue.right >= minX) {
+        horizontalLanes.push(rectValue.top - 14, rectValue.bottom + 14)
+      }
+    })
+    occupiedSegments.forEach((segmentValue) => {
+      if (segmentValue.orientation === 'horizontal' && segmentValue.axis >= minY && segmentValue.axis <= maxY) {
+        verticalLanes.push(segmentValue.start - 14, segmentValue.end + 14)
+      }
+      if (segmentValue.orientation === 'vertical' && segmentValue.axis >= minX && segmentValue.axis <= maxX) {
+        horizontalLanes.push(segmentValue.start - 14, segmentValue.end + 14)
+      }
+    })
+    verticalLanes.forEach((laneX) => {
+      addCandidate([start, s, { x: laneX, y: s.y }, { x: laneX, y: e.y }, e, end])
+    })
+    horizontalLanes.forEach((laneY) => {
+      addCandidate([start, s, { x: s.x, y: laneY }, { x: e.x, y: laneY }, e, end])
+    })
+    return candidates.sort((left, right) => (
+      flowchartRoutePenalty(left, obstacles, occupiedSegments, currentEdge) - flowchartRoutePenalty(right, obstacles, occupiedSegments, currentEdge) ||
+      c4PathLength(left) - c4PathLength(right)
+    ))[0]
   }
 
   function flowchartLaneOverlapPenalty(points, occupiedSegments = []) {
@@ -1580,11 +1689,8 @@
       }
       return direct
     }
-    const sideRoute = routeOrthogonalWithSides(from, to, fromSide, toSide, [], 24)
-    const fallbackRoute = routeOrthogonal(from, to, [], 24)
-    return flowchartRoutePenalty(sideRoute, obstacles, occupiedSegments, currentEdge) <= flowchartRoutePenalty(fallbackRoute, obstacles, occupiedSegments, currentEdge)
-      ? sideRoute
-      : fallbackRoute
+    const sideRoute = routeOrthogonalWithSidesAvoiding(from, to, fromSide, toSide, obstacles, occupiedSegments, currentEdge, 24)
+    return sideRoute
   }
 
   function c4RelationSides(rel, from, to) {
@@ -2697,11 +2803,13 @@
     const targetGroups = new Map()
     const sourceDepthGroups = new Map()
     const targetDepthGroups = new Map()
-    const edgeSides = edges.map((edge) => {
+    const baseEdgeSides = edges.map((edge) => {
       const from = positions.get(edge.from)
       const to = positions.get(edge.to)
       return from && to ? flowchartSideForBoxes(from, to, direction) : null
     })
+    const decisionEdgeSides = adjustFlowchartDecisionExitSides(edges, baseEdgeSides, positions, nodes)
+    const edgeSides = adjustFlowchartReturnEntrySides(edges, decisionEdgeSides, positions)
     edges.forEach((edge, edgeIndex) => {
       const from = positions.get(edge.from)
       const to = positions.get(edge.to)

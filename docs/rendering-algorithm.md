@@ -156,7 +156,7 @@ For normal forward edges, the diagram direction decides the exit and entry sides
 | `LR` | source right to target left |
 | `RL` | source left to target right |
 
-Back edges use the opposite sides. Same-rank or cross-rank edges may use the perpendicular sides, but rerouting must not move the chosen start or end port after the port rule has been selected.
+Back edges use the opposite sides. Same-rank or cross-rank edges may use the perpendicular sides, but rerouting must not move the chosen start or end port after the port rule has been selected. A decision diamond has one extra constraint: an outgoing branch must not reuse a side that already carries an incoming edge into that same decision. When a back branch would otherwise exit from the incoming side, it is moved to a perpendicular side so the loop reads as leaving the decision instead of reversing through its entry port. Return edges also avoid entering a target through the same side that the target already uses for outgoing flow, which prevents a loop from visually riding on top of the forward edge.
 
 ### Line Quality Rules
 
@@ -167,6 +167,7 @@ Flowchart routes are orthogonal polylines. The renderer should preserve these li
 - Edges that share a source or target may cross only inside a constrained fan zone, and only within a small crossing budget.
 - Collinear line overlap is treated as a defect. Unrelated edges have a zero-pixel overlap budget; shared-endpoint edges have only a short local overlap budget.
 - A route may detour to avoid nodes or line conflicts, but its perpendicular span must stay close to the source-target corridor. Wide loops around unrelated parts of the canvas are invalid.
+- Mixed-side routes keep their selected ports and add detour lanes from both node obstacles and already routed line segments before choosing the lowest-penalty path.
 - Labels are placed after routing and must remain inside the viewport without overlapping node bodies.
 
 The verification script checks these rules across the generated flowchart quality sample set. Individual dense samples can carry explicit budgets, but the default policy is intentionally strict: unrelated crossings are zero, unrelated overlap is zero, and route span overflow is capped.

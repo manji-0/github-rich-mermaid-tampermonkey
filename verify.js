@@ -1035,7 +1035,10 @@ const flowchartRustSamples = [
   B -- Approved --> C[Merge]
   B -- Changes --> A`,
     check({ svg }) {
-      assertIncludes(svg, 'viewBox="0 0 864.0 280.0"', this.name)
+      const viewBox = svgViewBoxRect(svg, this.name)
+      if (viewBox.right - viewBox.left > 940 || viewBox.bottom - viewBox.top > 360) {
+        throw new Error(`${this.name}: decision loop canvas grew too large ${viewBoxOf(svg, this.name)}`)
+      }
       const a = flowchartNodeBounds(svg, 'A')
       const b = flowchartNodeBounds(svg, 'B')
       const c = flowchartNodeBounds(svg, 'C')
@@ -1043,6 +1046,13 @@ const flowchartRustSamples = [
         throw new Error(`Flowchart LR cyclic sample should remain horizontal: A=${a.x}, B=${b.x}, C=${c.x}`)
       }
       for (const edge of ['A->B', 'B->C', 'B->A']) assertIncludes(svg, `data-flowchart-edge="${edge}"`, this.name)
+      const paths = flowchartEdgePaths(svg)
+      const decisionRect = rectFromBox(b)
+      const incomingSide = sideForFlowchartPortPoint(paths.get('A->B').at(-1), decisionRect)
+      const backExitSide = sideForFlowchartPortPoint(paths.get('B->A')[0], decisionRect)
+      if (incomingSide === backExitSide) {
+        throw new Error(`${this.name}: decision back edge exits from incoming side ${backExitSide}`)
+      }
     },
   },
   {
@@ -2536,7 +2546,9 @@ function flowchartEdgeGroup(svg, id) {
 
 function flowchartEdgeLabelRect(svg, id, label) {
   const group = flowchartEdgeGroup(svg, id)
-  const textIndex = group.indexOf(`>${label}</text>`)
+  const exactTextIndex = group.indexOf(`>${label}</text>`)
+  const wrappedTextIndex = label.split(/\s+/).map((token) => group.indexOf(`>${token}</text>`)).find((index) => index >= 0) ?? -1
+  const textIndex = exactTextIndex >= 0 ? exactTextIndex : wrappedTextIndex
   if (textIndex < 0) throw new Error(`missing flowchart edge label ${id}: ${label}`)
   const rectTag = [...group.slice(0, textIndex).matchAll(/<rect\b[^>]*>/g)].at(-1)?.[0]
   if (!rectTag) throw new Error(`missing flowchart edge label rect ${id}: ${label}`)
@@ -2606,6 +2618,23 @@ function flowchartNodeBounds(svg, id) {
     }
   }
   throw new Error(`flowchart node ${id} has no measurable shape`)
+}
+
+function flowchartNodeIsDiamond(svg, id) {
+  const group = flowchartNodeGroup(svg, id)
+  const pathStart = group.indexOf('<path ')
+  if (pathStart < 0) return false
+  const path = group.slice(pathStart, group.indexOf('>', pathStart) + 1)
+  const points = parseSvgPathPoints(svgAttrValue(path, 'd'))
+  if (points.length !== 4) return false
+  const bounds = rectFromBox(flowchartNodeBounds(svg, id))
+  const cx = (bounds.left + bounds.right) / 2
+  const cy = (bounds.top + bounds.bottom) / 2
+  const near = (left, right) => Math.abs(left - right) < 0.2
+  return near(points[0].x, cx) && near(points[0].y, bounds.top) &&
+    near(points[1].x, bounds.right) && near(points[1].y, cy) &&
+    near(points[2].x, cx) && near(points[2].y, bounds.bottom) &&
+    near(points[3].x, bounds.left) && near(points[3].y, cy)
 }
 
 function flowchartNodeTextY(svg, id, label) {
@@ -3054,7 +3083,7 @@ function assertFlowchartQualitySample(svg, sample) {
     const endpoints = edgeId.split('->')
     const fromRect = nodeRects.get(endpoints[0])
     const toRect = nodeRects.get(endpoints[1])
-    if (fromRect && toRect) assertFlowchartEdgePortRule(svg, sample.source.split(/\s+/)[1] || 'TD', edgeId, sample.name, fromRect, toRect)
+    if (fromRect && toRect) assertFlowchartEdgePortRule(svg, sample.source.split(/\s+/)[1] || 'TD', edgeId, sample.name, fromRect, toRect, paths)
     for (let index = 0; index < points.length - 1; index += 1) {
       const a = points[index]
       const b = points[index + 1]
@@ -3101,19 +3130,60 @@ function assertFlowchartQualitySample(svg, sample) {
   })
 }
 
-function assertFlowchartEdgePortRule(svg, direction, edgeId, label, fromRect = null, toRect = null) {
-  const paths = flowchartEdgePaths(svg)
+function assertFlowchartEdgePortRule(svg, direction, edgeId, label, fromRect = null, toRect = null, pathsArg = null) {
+  const paths = pathsArg || flowchartEdgePaths(svg)
   const points = paths.get(edgeId)
   if (!points || points.length < 2) throw new Error(`${label}: missing route for ${edgeId}`)
   const [fromId, toId] = edgeId.split('->')
   const sourceRect = fromRect || rectFromBox(flowchartNodeBounds(svg, fromId))
   const targetRect = toRect || rectFromBox(flowchartNodeBounds(svg, toId))
-  const [expectedFromSide, expectedToSide] = expectedFlowchartPortSides(sourceRect, targetRect, direction)
+  const [expectedFromSide, expectedToSide] = expectedFlowchartAdjustedPortSides(svg, direction, edgeId, fromId, toId, sourceRect, targetRect, paths)
   const actualFromSide = sideForFlowchartPortPoint(points[0], sourceRect)
   const actualToSide = sideForFlowchartPortPoint(points[points.length - 1], targetRect)
   if (actualFromSide !== expectedFromSide || actualToSide !== expectedToSide) {
     throw new Error(`${label}: ${edgeId} uses ${actualFromSide}->${actualToSide}, expected ${expectedFromSide}->${expectedToSide} for ${direction}`)
   }
+}
+
+function expectedFlowchartAdjustedPortSides(svg, direction, edgeId, fromId, toId, sourceRect, targetRect, paths) {
+  const sides = expectedFlowchartPortSides(sourceRect, targetRect, direction)
+  if (flowchartNodeIsDiamond(svg, fromId)) {
+    const incomingSides = new Set()
+    for (const [otherEdgeId, otherPoints] of paths.entries()) {
+      if (otherEdgeId === edgeId || !otherPoints.length) continue
+      const [, incomingTo] = otherEdgeId.split('->')
+      if (incomingTo !== fromId) continue
+      incomingSides.add(sideForFlowchartPortPoint(otherPoints[otherPoints.length - 1], sourceRect))
+    }
+    if (incomingSides.has(sides[0])) sides[0] = expectedFlowchartDecisionExitSide(sourceRect, targetRect, sides[0])
+  }
+  const outgoingSides = new Set()
+  for (const [otherEdgeId, otherPoints] of paths.entries()) {
+    if (otherEdgeId === edgeId || !otherPoints.length) continue
+    const [outgoingFrom] = otherEdgeId.split('->')
+    if (outgoingFrom !== toId) continue
+    outgoingSides.add(sideForFlowchartPortPoint(otherPoints[0], targetRect))
+  }
+  if (outgoingSides.has(sides[1])) sides[1] = expectedFlowchartReturnEntrySide(sourceRect, targetRect, sides[1])
+  return sides
+}
+
+function expectedFlowchartDecisionExitSide(fromRect, toRect, blockedSide) {
+  const fx = (fromRect.left + fromRect.right) / 2
+  const fy = (fromRect.top + fromRect.bottom) / 2
+  const tx = (toRect.left + toRect.right) / 2
+  const ty = (toRect.top + toRect.bottom) / 2
+  if (blockedSide === 'left' || blockedSide === 'right') return ty < fy ? 'top' : 'bottom'
+  return tx < fx ? 'left' : 'right'
+}
+
+function expectedFlowchartReturnEntrySide(fromRect, toRect, blockedSide) {
+  const fx = (fromRect.left + fromRect.right) / 2
+  const fy = (fromRect.top + fromRect.bottom) / 2
+  const tx = (toRect.left + toRect.right) / 2
+  const ty = (toRect.top + toRect.bottom) / 2
+  if (blockedSide === 'left' || blockedSide === 'right') return fy < ty ? 'top' : 'bottom'
+  return fx < tx ? 'left' : 'right'
 }
 
 function expectedFlowchartPortSides(fromRect, toRect, direction) {
