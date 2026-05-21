@@ -138,6 +138,39 @@ renderC4Component
 
 The rest of this document walks through those phases in more detail.
 
+## Flowchart Routing Contract
+
+<!-- dagayn: discusses-artifact github-rich-mermaid.user.js::flowchartSideForBoxes -->
+<!-- dagayn: discusses-artifact verify.js::assertFlowchartQualitySample -->
+
+Flowcharts use a smaller renderer than C4, but their routing still follows an explicit quality contract. The contract exists so readability bugs can be tested as renderer behavior rather than judged by screenshots alone.
+
+### Port Rules
+
+For normal forward edges, the diagram direction decides the exit and entry sides:
+
+| Direction | Forward edge |
+| --- | --- |
+| `TD` | source bottom to target top |
+| `BT` | source top to target bottom |
+| `LR` | source right to target left |
+| `RL` | source left to target right |
+
+Back edges use the opposite sides. Same-rank or cross-rank edges may use the perpendicular sides, but rerouting must not move the chosen start or end port after the port rule has been selected.
+
+### Line Quality Rules
+
+Flowchart routes are orthogonal polylines. The renderer should preserve these line rules:
+
+- Routes must not cross non-endpoint node bodies.
+- Unrelated edges must not cross each other.
+- Edges that share a source or target may cross only inside a constrained fan zone, and only within a small crossing budget.
+- Collinear line overlap is treated as a defect. Unrelated edges have a zero-pixel overlap budget; shared-endpoint edges have only a short local overlap budget.
+- A route may detour to avoid nodes or line conflicts, but its perpendicular span must stay close to the source-target corridor. Wide loops around unrelated parts of the canvas are invalid.
+- Labels are placed after routing and must remain inside the viewport without overlapping node bodies.
+
+The verification script checks these rules across the generated flowchart quality sample set. Individual dense samples can carry explicit budgets, but the default policy is intentionally strict: unrelated crossings are zero, unrelated overlap is zero, and route span overflow is capped.
+
 ## Phase 0: GitHub Source Discovery
 
 The userscript runs on `https://github.com/*` and has to deal with several GitHub Markdown states:

@@ -1184,22 +1184,30 @@
     const fy = from.y + from.h / 2
     const tx = to.x + to.w / 2
     const ty = to.y + to.h / 2
+    const verticalOverlap = from.y < to.y + to.h && from.y + from.h > to.y
+    const horizontalOverlap = from.x < to.x + to.w && from.x + from.w > to.x
     if (direction === 'BT') {
-      if (fy - from.h / 2 >= ty + to.h / 2 - 1) return ['top', 'bottom']
-      if (Math.abs(fx - tx) > Math.abs(fy - ty)) return fx < tx ? ['right', 'left'] : ['left', 'right']
-      return fy > ty ? ['top', 'bottom'] : ['bottom', 'top']
+      if (from.y >= to.y + to.h - 1) return ['top', 'bottom']
+      if (from.y + from.h <= to.y + 1) return ['bottom', 'top']
+      if (!horizontalOverlap) return fx < tx ? ['right', 'left'] : ['left', 'right']
+      return fy >= ty ? ['top', 'bottom'] : ['bottom', 'top']
     }
     if (direction === 'LR') {
-      if (fx + from.w / 2 <= tx - to.w / 2 + 1) return ['right', 'left']
-      if (Math.abs(fy - ty) > Math.abs(fx - tx)) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
-      return fx < tx ? ['right', 'left'] : ['left', 'right']
+      if (from.x + from.w <= to.x + 1) return ['right', 'left']
+      if (from.x >= to.x + to.w - 1) return ['left', 'right']
+      if (!verticalOverlap) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
+      return fx <= tx ? ['right', 'left'] : ['left', 'right']
     }
     if (direction === 'RL') {
-      if (fx - from.w / 2 >= tx + to.w / 2 - 1) return ['left', 'right']
-      if (Math.abs(fy - ty) > Math.abs(fx - tx)) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
-      return fx > tx ? ['left', 'right'] : ['right', 'left']
+      if (from.x >= to.x + to.w - 1) return ['left', 'right']
+      if (from.x + from.w <= to.x + 1) return ['right', 'left']
+      if (!verticalOverlap) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
+      return fx >= tx ? ['left', 'right'] : ['right', 'left']
     }
-    return sideForBoxes(from, to)
+    if (from.y + from.h <= to.y + 1) return ['bottom', 'top']
+    if (from.y >= to.y + to.h - 1) return ['top', 'bottom']
+    if (!horizontalOverlap) return fx < tx ? ['right', 'left'] : ['left', 'right']
+    return fy <= ty ? ['bottom', 'top'] : ['top', 'bottom']
   }
 
   function anchorOnBox(box, side) {
@@ -1329,21 +1337,72 @@
     return simplifyPolyline(points)
   }
 
-  function flowchartRoutePenalty(points, obstacles) {
-    let score = c4PathLength(points) + c4BendCount(points) * 12
-    for (const rectValue of obstacles) {
-      if (c4PolylineIntersectsRect(points, rectValue)) score += 100000
+  function flowchartLaneOverlapPenalty(points, occupiedSegments = []) {
+    let score = 0
+    const routeSegments = c4SegmentsFromRoute(points)
+    for (const segmentValue of routeSegments) {
+      for (const occupied of occupiedSegments) {
+        if (segmentValue.orientation !== occupied.orientation) continue
+        const overlap = Math.min(segmentValue.end, occupied.end) - Math.max(segmentValue.start, occupied.start)
+        if (overlap <= 1) continue
+        const axisGap = Math.abs(segmentValue.axis - occupied.axis)
+        if (axisGap < 0.1) score += 50000 + overlap * 50
+        else if (axisGap < 10) score += (10 - axisGap) * 80 + overlap
+      }
     }
     return score
   }
 
+  function flowchartExactLaneOverlapPenalty(points, occupiedSegments = []) {
+    let score = 0
+    const routeSegments = c4SegmentsFromRoute(points)
+    for (const segmentValue of routeSegments) {
+      for (const occupied of occupiedSegments) {
+        if (segmentValue.orientation !== occupied.orientation) continue
+        if (Math.abs(segmentValue.axis - occupied.axis) >= 0.1) continue
+        const overlap = Math.min(segmentValue.end, occupied.end) - Math.max(segmentValue.start, occupied.start)
+        if (overlap > 1) score += overlap
+      }
+    }
+    return score
+  }
+
+  function flowchartLaneCrossingPenalty(points, occupiedSegments = []) {
+    let score = 0
+    const routeSegments = c4SegmentsFromRoute(points)
+    for (const segmentValue of routeSegments) {
+      for (const occupied of occupiedSegments) {
+        if (segmentValue.orientation === occupied.orientation) continue
+        const vertical = segmentValue.orientation === 'vertical' ? segmentValue : occupied
+        const horizontal = segmentValue.orientation === 'horizontal' ? segmentValue : occupied
+        if (
+          vertical.axis > horizontal.start + 0.1 &&
+          vertical.axis < horizontal.end - 0.1 &&
+          horizontal.axis > vertical.start + 0.1 &&
+          horizontal.axis < vertical.end - 0.1
+        ) {
+          score += 25000
+        }
+      }
+    }
+    return score
+  }
+
+  function flowchartRoutePenalty(points, obstacles, occupiedSegments = []) {
+    let score = c4PathLength(points) + c4BendCount(points) * 12
+    for (const rectValue of obstacles) {
+      if (c4PolylineIntersectsRect(points, rectValue)) score += 100000
+    }
+    score += flowchartLaneOverlapPenalty(points, occupiedSegments)
+    score += flowchartLaneCrossingPenalty(points, occupiedSegments)
+    return score
+  }
+
   function flowchartAvoidingBackEdgeRoute(start, end, horizontal, startTurn, endTurn, obstacles = []) {
-    if (!obstacles.length) return null
     if (horizontal) {
       const spanLeft = Math.min(startTurn, endTurn)
       const spanRight = Math.max(startTurn, endTurn)
       const blockers = obstacles.filter((rectValue) => rectValue.right >= spanLeft && rectValue.left <= spanRight)
-      if (!blockers.length) return null
       const topLane = Math.min(start.y, end.y, ...blockers.map((rectValue) => rectValue.top)) - 36
       const bottomLane = Math.max(start.y, end.y, ...blockers.map((rectValue) => rectValue.bottom)) + 36
       return [topLane, bottomLane]
@@ -1360,7 +1419,6 @@
     const spanTop = Math.min(startTurn, endTurn)
     const spanBottom = Math.max(startTurn, endTurn)
     const blockers = obstacles.filter((rectValue) => rectValue.bottom >= spanTop && rectValue.top <= spanBottom)
-    if (!blockers.length) return null
     const leftLane = Math.min(start.x, end.x, ...blockers.map((rectValue) => rectValue.left)) - 36
     const rightLane = Math.max(start.x, end.x, ...blockers.map((rectValue) => rectValue.right)) + 36
     return [leftLane, rightLane]
@@ -1380,17 +1438,39 @@
     const start = anchorOnBox(from, fromSide)
     const end = anchorOnBox(to, toSide)
     const obstacles = options.obstacles || []
+    const occupiedSegments = options.occupiedSegments || []
     const direction = options.direction || (horizontal ? 'LR' : 'TD')
+    const sourceLaneDepthOffset = options.sourceLaneDepthOffset || 0
+    const targetLaneDepthOffset = options.targetLaneDepthOffset || 0
+    const laneAdjustments = occupiedSegments.length ? [0, 10, 20, 30] : [0]
     if (!horizontal && (fromSide === 'bottom' || fromSide === 'top') && (toSide === 'top' || toSide === 'bottom')) {
       const fromDir = fromSide === 'bottom' ? 1 : -1
       const toDir = toSide === 'top' ? -1 : 1
-      const effectiveStartLaneOffset = sourceLaneOffset || targetLaneOffset
-      const startTurnY = start.y + fromDir * 24 + effectiveStartLaneOffset * 0.25
-      const endTurnY = end.y + toDir * 24 + targetLaneOffset * 0.5
-      const direct = Math.abs(startTurnY - endTurnY) < 0.1
-        ? simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
-        : simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
-      if (obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+      const buildDirect = (laneAdjustment) => {
+        const effectiveSourceLaneDepthOffset = sourceLaneDepthOffset || targetLaneDepthOffset
+        const effectiveTargetLaneDepthOffset = sourceLaneDepthOffset ? targetLaneDepthOffset : 0
+        let sourceDepth = 24 + Math.max(0, effectiveSourceLaneDepthOffset + laneAdjustment)
+        let targetDepth = 24 + Math.max(0, effectiveTargetLaneDepthOffset + laneAdjustment)
+        if (fromDir === -toDir) {
+          const gap = Math.abs(end.y - start.y)
+          const maxTotalDepth = gap + 20
+          targetDepth = Math.min(targetDepth, Math.max(24, maxTotalDepth - 24))
+          sourceDepth = Math.min(sourceDepth, Math.max(24, maxTotalDepth - targetDepth))
+        }
+        const startTurnY = start.y + fromDir * sourceDepth
+        const endTurnY = end.y + toDir * targetDepth
+        return Math.abs(startTurnY - endTurnY) < 0.1
+          ? simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+          : simplifyPolyline([start, { x: start.x, y: startTurnY }, { x: end.x, y: startTurnY }, { x: end.x, y: endTurnY }, end])
+      }
+      const direct = laneAdjustments
+        .map(buildDirect)
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments) - flowchartRoutePenalty(right, obstacles, occupiedSegments) || c4PathLength(left) - c4PathLength(right))[0]
+      const backwards = (direction === 'TD' && start.y > end.y) || (direction === 'BT' && start.y < end.y)
+      const intersectsObstacle = obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))
+      if (intersectsObstacle || (backwards && flowchartExactLaneOverlapPenalty(direct, occupiedSegments) > 0)) {
+        const startTurnY = intersectsObstacle || direct.length <= 2 ? start.y + fromDir * 24 : direct[1].y
+        const endTurnY = intersectsObstacle || direct.length <= 3 ? end.y + toDir * 24 : direct[direct.length - 2].y
         return flowchartAvoidingBackEdgeRoute(start, end, false, startTurnY, endTurnY, obstacles) || direct
       }
       return direct
@@ -1398,20 +1478,38 @@
     if (horizontal && (fromSide === 'right' || fromSide === 'left') && (toSide === 'left' || toSide === 'right')) {
       const fromDir = fromSide === 'right' ? 1 : -1
       const toDir = toSide === 'left' ? -1 : 1
-      const effectiveStartLaneOffset = sourceLaneOffset || targetLaneOffset
-      const startTurnX = start.x + fromDir * 24 + effectiveStartLaneOffset * 0.25
-      const endTurnX = end.x + toDir * 24 + targetLaneOffset * 0.5
-      const direct = Math.abs(startTurnX - endTurnX) < 0.1
-        ? simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: endTurnX, y: end.y }, end])
-        : simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: startTurnX, y: end.y }, { x: endTurnX, y: end.y }, end])
-      if (obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))) {
+      const buildDirect = (laneAdjustment) => {
+        const effectiveSourceLaneDepthOffset = sourceLaneDepthOffset || targetLaneDepthOffset
+        const effectiveTargetLaneDepthOffset = sourceLaneDepthOffset ? targetLaneDepthOffset : 0
+        let sourceDepth = 24 + Math.max(0, effectiveSourceLaneDepthOffset + laneAdjustment)
+        let targetDepth = 24 + Math.max(0, effectiveTargetLaneDepthOffset + laneAdjustment)
+        if (fromDir === -toDir) {
+          const gap = Math.abs(end.x - start.x)
+          const maxTotalDepth = gap + 20
+          targetDepth = Math.min(targetDepth, Math.max(24, maxTotalDepth - 24))
+          sourceDepth = Math.min(sourceDepth, Math.max(24, maxTotalDepth - targetDepth))
+        }
+        const startTurnX = start.x + fromDir * sourceDepth
+        const endTurnX = end.x + toDir * targetDepth
+        return Math.abs(startTurnX - endTurnX) < 0.1
+          ? simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: endTurnX, y: end.y }, end])
+          : simplifyPolyline([start, { x: startTurnX, y: start.y }, { x: startTurnX, y: end.y }, { x: endTurnX, y: end.y }, end])
+      }
+      const direct = laneAdjustments
+        .map(buildDirect)
+        .sort((left, right) => flowchartRoutePenalty(left, obstacles, occupiedSegments) - flowchartRoutePenalty(right, obstacles, occupiedSegments) || c4PathLength(left) - c4PathLength(right))[0]
+      const backwards = (direction === 'LR' && start.x > end.x) || (direction === 'RL' && start.x < end.x)
+      const intersectsObstacle = obstacles.some((rectValue) => c4PolylineIntersectsRect(direct, rectValue))
+      if (intersectsObstacle || (backwards && flowchartExactLaneOverlapPenalty(direct, occupiedSegments) > 0)) {
+        const startTurnX = intersectsObstacle || direct.length <= 2 ? start.x + fromDir * 24 : direct[1].x
+        const endTurnX = intersectsObstacle || direct.length <= 3 ? end.x + toDir * 24 : direct[direct.length - 2].x
         return flowchartAvoidingBackEdgeRoute(start, end, true, startTurnX, endTurnX, obstacles) || direct
       }
       return direct
     }
     const sideRoute = routeOrthogonalWithSides(from, to, fromSide, toSide, [], 24)
     const fallbackRoute = routeOrthogonal(from, to, [], 24)
-    return flowchartRoutePenalty(sideRoute, obstacles) <= flowchartRoutePenalty(fallbackRoute, obstacles)
+    return flowchartRoutePenalty(sideRoute, obstacles, occupiedSegments) <= flowchartRoutePenalty(fallbackRoute, obstacles, occupiedSegments)
       ? sideRoute
       : fallbackRoute
   }
@@ -1810,7 +1908,7 @@
       const a = points[index]
       const b = points[index + 1]
       const length = Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
-      if (length >= 40) segments.push({ a, b, length, index })
+      if (length >= 24) segments.push({ a, b, length, index })
     }
     segments.sort((left, right) => right.length - left.length || left.index - right.index)
     const candidates = []
@@ -1938,7 +2036,9 @@
         }
       }
     }
-    return candidates.sort((left, right) => left.score - right.score || left.segmentIndex - right.segmentIndex)
+    const sortedCandidates = candidates.sort((left, right) => left.score - right.score || left.segmentIndex - right.segmentIndex)
+    if (sortedCandidates.length) return sortedCandidates
+    return fallbackCandidates.sort((left, right) => left.score - right.score || left.segmentIndex - right.segmentIndex)
   }
 
   function c4ReservedLaneRectFromLabelRect(rectValue) {
@@ -2427,6 +2527,9 @@
           const size = itemSizes.get(id) || { w: 0, h: 0 }
           positions.set(id, { x: p.y, y: p.x, w: size.w, h: size.h })
         })
+        if (dir === 'RL') {
+          positions.forEach((p, id) => positions.set(id, { ...p, x: totalW - p.x - p.w }))
+        }
         return { width: totalW, height: totalH, positions }
       }
       const grid = buildLayeredLayout({
@@ -2438,6 +2541,9 @@
         gapX: F.cellGapX,
         gapY: F.cellGapY,
       })
+      if (dir === 'BT') {
+        grid.positions.forEach((p, id) => grid.positions.set(id, { ...p, y: grid.height - p.y - p.h }))
+      }
       return { width: grid.width, height: grid.height, positions: grid.positions }
     }
     const rootGrid = buildFlowchartGrid(null, direction)
@@ -2512,8 +2618,12 @@
     }
     const sourcePortOffsets = new Map()
     const targetPortOffsets = new Map()
+    const sourceLaneDepthOffsets = new Map()
+    const targetLaneDepthOffsets = new Map()
     const sourceGroups = new Map()
     const targetGroups = new Map()
+    const sourceDepthGroups = new Map()
+    const targetDepthGroups = new Map()
     const edgeSides = edges.map((edge) => {
       const from = positions.get(edge.from)
       const to = positions.get(edge.to)
@@ -2528,25 +2638,48 @@
       const [fromSide, toSide] = sides
       const sourceKey = `${edge.from}:${fromSide}`
       const targetKey = `${edge.to}:${toSide}`
+      const sourceDepthKey = edge.from
+      const targetDepthKey = edge.to
       if (!sourceGroups.has(sourceKey)) sourceGroups.set(sourceKey, [])
       sourceGroups.get(sourceKey).push({
         edgeIndex,
         side: fromSide,
+        otherSide: toSide,
         axis: fromSide === 'top' || fromSide === 'bottom' ? to.x + to.w / 2 : to.y + to.h / 2,
         box: from,
+        otherBox: to,
+      })
+      if (!sourceDepthGroups.has(sourceDepthKey)) sourceDepthGroups.set(sourceDepthKey, [])
+      sourceDepthGroups.get(sourceDepthKey).push({
+        edgeIndex,
+        axis: horizontal ? to.y + to.h / 2 : to.x + to.w / 2,
+        box: from,
+        otherBox: to,
       })
       if (!targetGroups.has(targetKey)) targetGroups.set(targetKey, [])
       targetGroups.get(targetKey).push({
         edgeIndex,
         side: toSide,
+        otherSide: fromSide,
         axis: toSide === 'top' || toSide === 'bottom' ? from.x + from.w / 2 : from.y + from.h / 2,
         box: to,
+        otherBox: from,
+      })
+      if (!targetDepthGroups.has(targetDepthKey)) targetDepthGroups.set(targetDepthKey, [])
+      targetDepthGroups.get(targetDepthKey).push({
+        edgeIndex,
+        axis: horizontal ? from.y + from.h / 2 : from.x + from.w / 2,
+        box: to,
+        otherBox: from,
       })
     })
-    const assignFlowchartOffsets = (groups, offsets) => {
+    const assignFlowchartOffsets = (groups, offsets, depthOffsets) => {
       groups.forEach((items) => {
         if (items.length <= 1) {
-          items.forEach((item) => offsets.set(item.edgeIndex, 0))
+          items.forEach((item) => {
+            offsets.set(item.edgeIndex, 0)
+            depthOffsets.set(item.edgeIndex, 0)
+          })
           return
         }
         items.sort((left, right) => left.axis - right.axis || left.edgeIndex - right.edgeIndex)
@@ -2556,14 +2689,57 @@
           : Math.max(0, items[0].box.h / 2 - 8)
         const pitch = Math.min(F.portPitch, maxSpread * 2 / Math.max(1, items.length - 1))
         const startOffset = -(pitch * (items.length - 1)) / 2
-        items.forEach((item, index) => offsets.set(item.edgeIndex, startOffset + pitch * index))
+        const anchorGap = (item) => {
+          const own = anchorOnBox(item.box, item.side)
+          const other = anchorOnBox(item.otherBox, item.otherSide)
+          return side === 'top' || side === 'bottom'
+            ? Math.abs(own.y - other.y)
+            : Math.abs(own.x - other.x)
+        }
+        const minGap = Math.min(...items.map(anchorGap).filter((value) => Number.isFinite(value)))
+        const maxLaneExtra = Math.max(0, (Number.isFinite(minGap) ? minGap : 72) - 48)
+        const laneDepthPitch = Math.min(16, maxLaneExtra / Math.max(1, items.length - 1))
+        items.forEach((item, index) => {
+          offsets.set(item.edgeIndex, startOffset + pitch * index)
+          depthOffsets.set(item.edgeIndex, laneDepthPitch * index)
+        })
       })
     }
-    assignFlowchartOffsets(sourceGroups, sourcePortOffsets)
-    assignFlowchartOffsets(targetGroups, targetPortOffsets)
+    assignFlowchartOffsets(sourceGroups, sourcePortOffsets, sourceLaneDepthOffsets)
+    assignFlowchartOffsets(targetGroups, targetPortOffsets, targetLaneDepthOffsets)
+    const assignFlowchartDepthOffsets = (groups, depthOffsets, distanceMode = 'axis') => {
+      groups.forEach((items) => {
+        if (items.length <= 1) return
+        const distanceFromBoxAxis = (item) => {
+          const boxAxis = horizontal ? item.box.y + item.box.h / 2 : item.box.x + item.box.w / 2
+          return Math.abs(item.axis - boxAxis)
+        }
+        items.sort((left, right) => (
+          distanceMode === 'near-first'
+            ? distanceFromBoxAxis(left) - distanceFromBoxAxis(right) || left.axis - right.axis || left.edgeIndex - right.edgeIndex
+            : distanceMode === 'far-first'
+              ? distanceFromBoxAxis(right) - distanceFromBoxAxis(left) || left.axis - right.axis || left.edgeIndex - right.edgeIndex
+              : left.axis - right.axis || left.edgeIndex - right.edgeIndex
+        ))
+        const rankGap = (item) => {
+          const boxCenter = horizontal ? item.box.x + item.box.w / 2 : item.box.y + item.box.h / 2
+          const otherCenter = horizontal ? item.otherBox.x + item.otherBox.w / 2 : item.otherBox.y + item.otherBox.h / 2
+          const boxSize = horizontal ? item.box.w : item.box.h
+          const otherSize = horizontal ? item.otherBox.w : item.otherBox.h
+          return Math.max(0, Math.abs(boxCenter - otherCenter) - (boxSize + otherSize) / 2)
+        }
+        const minGap = Math.min(...items.map(rankGap).filter((value) => Number.isFinite(value)))
+        const maxLaneExtra = Math.max(0, (Number.isFinite(minGap) ? minGap : 72) - 48)
+        const laneDepthPitch = Math.min(12, maxLaneExtra / Math.max(1, items.length - 1))
+        items.forEach((item, index) => depthOffsets.set(item.edgeIndex, laneDepthPitch * index))
+      })
+    }
+    assignFlowchartDepthOffsets(sourceDepthGroups, sourceLaneDepthOffsets, 'far-first')
+    assignFlowchartDepthOffsets(targetDepthGroups, targetLaneDepthOffsets, 'near-first')
     const flowchartObstaclesForEdge = (edge) => [...positions.entries()]
       .filter(([id]) => id !== edge.from && id !== edge.to && !subgraphs.has(id))
       .map(([, box]) => c4InflateRect(c4RectFromBox(box), 6))
+    const flowchartOccupiedSegments = []
     const routeRecords = edges.map((edge, edgeIndex) => {
       const a = positions.get(edge.from)
       const b = positions.get(edge.to)
@@ -2577,12 +2753,16 @@
       const route = routeFlowchartEdge(routedA, routedB, horizontal, fromOffset, toOffset, {
         direction,
         obstacles: flowchartObstaclesForEdge(edge),
+        occupiedSegments: flowchartOccupiedSegments,
+        sourceLaneDepthOffset: sourceLaneDepthOffsets.get(edgeIndex) || 0,
+        targetLaneDepthOffset: targetLaneDepthOffsets.get(edgeIndex) || 0,
       })
+      flowchartOccupiedSegments.push(...c4SegmentsFromRoute(route))
       return { edge, edgeIndex, route, labelPlacement: null }
     }).filter(Boolean)
     const flowchartLabelForbiddenRects = [...positions.entries()]
       .filter(([id]) => !subgraphs.has(id) && nodes.has(id))
-      .map(([, box]) => c4InflateRect(c4RectFromBox(box), 5))
+      .map(([, box]) => c4InflateRect(c4RectFromBox(box), 12))
     const routeSegments = routeRecords.flatMap((record) => (
       c4SegmentsFromRoute(record.route).map((segmentValue) => ({ edgeIndex: record.edgeIndex, segment: segmentValue }))
     ))

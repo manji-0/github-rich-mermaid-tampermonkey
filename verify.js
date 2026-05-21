@@ -872,7 +872,7 @@ const c4InvariantSamples = [
     Container(app, "App", "Go", "serves")
     ContainerDb(db, "DB", "Postgres", "stores")
   }`,
-    check() {
+    check({ renderer }) {
       const light = loadRenderer('light')
       const svg = light.renderMermaidSvg(this.source)
       const sys = c4NodeGroup(svg, 'sys')
@@ -1014,6 +1014,18 @@ const flowchartRustSamples = [
       assertFlowchartNodeTextCentered(svg, 'Draft', 'Draft save', this.name)
       assertFlowchartNodeTextCentered(svg, 'Analyze', 'Analyze graph', this.name)
       assertFlowchartNodeTextCentered(svg, 'Publish', 'Publish revision', this.name)
+    },
+  },
+  {
+    name: 'Flowchart direction controls forward edge ports',
+    source: `flowchart TD
+  A[Start] --> B[Next] --> C[Done]`,
+    check({ renderer }) {
+      for (const direction of ['TD', 'BT', 'LR', 'RL']) {
+        const svg = renderer.renderMermaidSvg(this.source.replace('flowchart TD', `flowchart ${direction}`))
+        assertFlowchartEdgePortRule(svg, direction, 'A->B', this.name)
+        assertFlowchartEdgePortRule(svg, direction, 'B->C', this.name)
+      }
     },
   },
   {
@@ -1185,6 +1197,43 @@ const flowchartRustSamples = [
       const lanes = ['Start->A', 'Start->B', 'Start->C'].map((edge) => longestVerticalAxis(paths.get(edge)))
       if (!(lanes[0] < lanes[1] && lanes[1] < lanes[2])) throw new Error(`flowchart fanout lanes out of order: ${lanes.join(', ')}`)
       if (lanes[1] - lanes[0] < 18 || lanes[2] - lanes[1] < 18) throw new Error(`flowchart fanout lanes too close: ${lanes.join(', ')}`)
+    },
+  },
+  {
+    name: 'Flowchart wide fanout and fanin lanes keep visible spacing',
+    source: `flowchart TD
+  Hub[Dispatch hub]
+  Hub -- parse --> Parse[Parse worker]
+  Hub -- route --> Route[Route worker]
+  Hub -- label --> Label[Label worker]
+  Hub -- validate --> Validate[Validate worker]
+  Parse --> Sink[Shared result]
+  Route --> Sink
+  Label --> Sink
+  Validate --> Sink`,
+    check({ svg }) {
+      const paths = flowchartEdgePaths(svg)
+      const longestHorizontalSegment = (edgeId) => {
+        const horizontalSegments = segments(paths.get(edgeId) || [])
+          .filter((segment) => segment.orientation === 'h')
+          .sort((left, right) => (right.end - right.start) - (left.end - left.start))
+        return horizontalSegments[0] ?? null
+      }
+      const assertMinGap = (label, horizontalSegments) => {
+        if (horizontalSegments.some((segment) => !segment)) throw new Error(`${label} missing horizontal route lane`)
+        for (let leftIndex = 0; leftIndex < horizontalSegments.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < horizontalSegments.length; rightIndex += 1) {
+            const left = horizontalSegments[leftIndex]
+            const right = horizontalSegments[rightIndex]
+            const overlap = Math.min(left.end, right.end) - Math.max(left.start, right.start)
+            if (overlap > 1 && Math.abs(left.axis - right.axis) < 7) {
+              throw new Error(`${label} lanes too close: ${horizontalSegments.map((segment) => segment.axis).join(', ')}`)
+            }
+          }
+        }
+      }
+      assertMinGap('wide fanout', ['Hub->Label', 'Hub->Parse', 'Hub->Route', 'Hub->Validate'].map(longestHorizontalSegment))
+      assertMinGap('wide fanin', ['Label->Sink', 'Parse->Sink', 'Route->Sink', 'Validate->Sink'].map(longestHorizontalSegment))
     },
   },
   {
@@ -2821,6 +2870,11 @@ function flowchartQualitySample(name, direction, lines, nodes, edges, labels = [
     edges: edges.map(([from, to]) => edgeKey(from, to)),
     labels,
     maxOverlapCount: options.maxOverlapCount ?? Math.max(2, Math.ceil(edges.length * 0.12)),
+    maxUnrelatedCrossingCount: options.maxUnrelatedCrossingCount ?? 0,
+    maxSharedEndpointCrossingCount: options.maxSharedEndpointCrossingCount ?? Math.max(2, Math.ceil(edges.length * 0.14)),
+    maxSharedEndpointOverlapPx: options.maxSharedEndpointOverlapPx ?? 42,
+    maxUnrelatedOverlapPx: options.maxUnrelatedOverlapPx ?? 1,
+    maxSpanOverflowPx: options.maxSpanOverflowPx ?? 96,
     maxWidthPerNode: options.maxWidthPerNode ?? 280,
     maxHeightPerNode: options.maxHeightPerNode ?? 260,
   }
@@ -2974,6 +3028,9 @@ function assertFlowchartQualitySample(svg, sample) {
   })
   for (const [edgeId, points] of paths.entries()) {
     const endpoints = edgeId.split('->')
+    const fromRect = nodeRects.get(endpoints[0])
+    const toRect = nodeRects.get(endpoints[1])
+    if (fromRect && toRect) assertFlowchartEdgePortRule(svg, sample.source.split(/\s+/)[1] || 'TD', edgeId, sample.name, fromRect, toRect)
     for (let index = 0; index < points.length - 1; index += 1) {
       const a = points[index]
       const b = points[index + 1]
@@ -2999,6 +3056,7 @@ function assertFlowchartQualitySample(svg, sample) {
   if (overlapCount > sample.maxOverlapCount) {
     throw new Error(`${sample.name}: too many collinear edge overlaps ${overlapCount}/${sample.maxOverlapCount}`)
   }
+  assertFlowchartLineQuality(paths, nodeRects, sample)
   sample.labels.forEach((label) => {
     if (svg.includes(`>${label}</text>`)) return
     const missingTokens = label.split(/\s+/).filter((token) => token && !svg.includes(`>${token}</text>`))
@@ -3017,6 +3075,135 @@ function assertFlowchartQualitySample(svg, sample) {
       }
     })
   })
+}
+
+function assertFlowchartEdgePortRule(svg, direction, edgeId, label, fromRect = null, toRect = null) {
+  const paths = flowchartEdgePaths(svg)
+  const points = paths.get(edgeId)
+  if (!points || points.length < 2) throw new Error(`${label}: missing route for ${edgeId}`)
+  const [fromId, toId] = edgeId.split('->')
+  const sourceRect = fromRect || rectFromBox(flowchartNodeBounds(svg, fromId))
+  const targetRect = toRect || rectFromBox(flowchartNodeBounds(svg, toId))
+  const [expectedFromSide, expectedToSide] = expectedFlowchartPortSides(sourceRect, targetRect, direction)
+  const actualFromSide = sideForFlowchartPortPoint(points[0], sourceRect)
+  const actualToSide = sideForFlowchartPortPoint(points[points.length - 1], targetRect)
+  if (actualFromSide !== expectedFromSide || actualToSide !== expectedToSide) {
+    throw new Error(`${label}: ${edgeId} uses ${actualFromSide}->${actualToSide}, expected ${expectedFromSide}->${expectedToSide} for ${direction}`)
+  }
+}
+
+function expectedFlowchartPortSides(fromRect, toRect, direction) {
+  const fx = (fromRect.left + fromRect.right) / 2
+  const fy = (fromRect.top + fromRect.bottom) / 2
+  const tx = (toRect.left + toRect.right) / 2
+  const ty = (toRect.top + toRect.bottom) / 2
+  const verticalOverlap = fromRect.top < toRect.bottom && fromRect.bottom > toRect.top
+  const horizontalOverlap = fromRect.left < toRect.right && fromRect.right > toRect.left
+  if (direction === 'BT') {
+    if (fromRect.top >= toRect.bottom - 1) return ['top', 'bottom']
+    if (fromRect.bottom <= toRect.top + 1) return ['bottom', 'top']
+    if (!horizontalOverlap) return fx < tx ? ['right', 'left'] : ['left', 'right']
+    return fy >= ty ? ['top', 'bottom'] : ['bottom', 'top']
+  }
+  if (direction === 'LR') {
+    if (fromRect.right <= toRect.left + 1) return ['right', 'left']
+    if (fromRect.left >= toRect.right - 1) return ['left', 'right']
+    if (!verticalOverlap) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
+    return fx <= tx ? ['right', 'left'] : ['left', 'right']
+  }
+  if (direction === 'RL') {
+    if (fromRect.left >= toRect.right - 1) return ['left', 'right']
+    if (fromRect.right <= toRect.left + 1) return ['right', 'left']
+    if (!verticalOverlap) return fy < ty ? ['bottom', 'top'] : ['top', 'bottom']
+    return fx >= tx ? ['left', 'right'] : ['right', 'left']
+  }
+  if (fromRect.bottom <= toRect.top + 1) return ['bottom', 'top']
+  if (fromRect.top >= toRect.bottom - 1) return ['top', 'bottom']
+  if (!horizontalOverlap) return fx < tx ? ['right', 'left'] : ['left', 'right']
+  return fy <= ty ? ['bottom', 'top'] : ['top', 'bottom']
+}
+
+function sideForFlowchartPortPoint(point, rectValue) {
+  const distances = [
+    ['left', Math.abs(point.x - rectValue.left)],
+    ['right', Math.abs(point.x - rectValue.right)],
+    ['top', Math.abs(point.y - rectValue.top)],
+    ['bottom', Math.abs(point.y - rectValue.bottom)],
+  ]
+  distances.sort((left, right) => left[1] - right[1])
+  if (distances[0][1] > 12) throw new Error(`point ${JSON.stringify(point)} is not on node boundary ${JSON.stringify(rectValue)}`)
+  return distances[0][0]
+}
+
+function assertFlowchartLineQuality(paths, nodeRects, sample) {
+  const entries = [...paths.entries()]
+  let unrelatedCrossingCount = 0
+  let sharedEndpointCrossingCount = 0
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    const [leftId, leftPoints] = entries[leftIndex]
+    assertFlowchartRouteSpan(leftId, leftPoints, nodeRects, sample)
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [rightId, rightPoints] = entries[rightIndex]
+      const sharedEndpoint = flowchartEdgesShareEndpoint(leftId, rightId)
+      const crossings = orthogonalPathCrossingCount(leftPoints, rightPoints)
+      if (sharedEndpoint) sharedEndpointCrossingCount += crossings
+      else unrelatedCrossingCount += crossings
+      const maxOverlap = maxCollinearOverlapLength(leftPoints, rightPoints)
+      const limit = sharedEndpoint ? sample.maxSharedEndpointOverlapPx : sample.maxUnrelatedOverlapPx
+      if (maxOverlap > limit) {
+        throw new Error(`${sample.name}: edge overlap ${leftId}/${rightId} ${maxOverlap.toFixed(1)}px > ${limit}px`)
+      }
+    }
+  }
+  if (unrelatedCrossingCount > sample.maxUnrelatedCrossingCount) {
+    throw new Error(`${sample.name}: unrelated edge crossings ${unrelatedCrossingCount}/${sample.maxUnrelatedCrossingCount}`)
+  }
+  if (sharedEndpointCrossingCount > sample.maxSharedEndpointCrossingCount) {
+    throw new Error(`${sample.name}: shared endpoint crossings ${sharedEndpointCrossingCount}/${sample.maxSharedEndpointCrossingCount}`)
+  }
+}
+
+function assertFlowchartRouteSpan(edgeId, points, nodeRects, sample) {
+  const [fromId, toId] = edgeId.split('->')
+  const fromRect = nodeRects.get(fromId)
+  const toRect = nodeRects.get(toId)
+  if (!fromRect || !toRect) return
+  const routeBounds = points.reduce((bounds, point) => ({
+    left: Math.min(bounds.left, point.x),
+    top: Math.min(bounds.top, point.y),
+    right: Math.max(bounds.right, point.x),
+    bottom: Math.max(bounds.bottom, point.y),
+  }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity })
+  const endpointBounds = {
+    left: Math.min(fromRect.left, toRect.left),
+    top: Math.min(fromRect.top, toRect.top),
+    right: Math.max(fromRect.right, toRect.right),
+    bottom: Math.max(fromRect.bottom, toRect.bottom),
+  }
+  const direction = sample.source.split(/\s+/)[1] || 'TD'
+  const perpendicularOverflow = direction === 'LR' || direction === 'RL'
+    ? Math.max(0, endpointBounds.top - routeBounds.top, routeBounds.bottom - endpointBounds.bottom)
+    : Math.max(0, endpointBounds.left - routeBounds.left, routeBounds.right - endpointBounds.right)
+  if (perpendicularOverflow > sample.maxSpanOverflowPx) {
+    throw new Error(`${sample.name}: route ${edgeId} span overflow ${perpendicularOverflow.toFixed(1)}px > ${sample.maxSpanOverflowPx}px`)
+  }
+}
+
+function flowchartEdgesShareEndpoint(leftId, rightId) {
+  const left = leftId.split('->')
+  const right = rightId.split('->')
+  return left.some((id) => right.includes(id))
+}
+
+function maxCollinearOverlapLength(leftPoints, rightPoints) {
+  let maxOverlap = 0
+  for (const left of segments(leftPoints)) {
+    for (const right of segments(rightPoints)) {
+      if (left.orientation !== right.orientation || Math.abs(left.axis - right.axis) > 0.1) continue
+      maxOverlap = Math.max(maxOverlap, Math.min(left.end, right.end) - Math.max(left.start, right.start))
+    }
+  }
+  return Math.max(0, maxOverlap)
 }
 
 function c4DeflateTestRect(rectValue, amount) {
